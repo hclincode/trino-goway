@@ -1,0 +1,6 @@
+[submodule "trino-gateway"]
+	path = trino-gateway
+	url = https://github.com/trinodb/trino-gateway
+[submodule "trino"]
+	path = trino
+	url = https://github.com/trinodb/trino.git
