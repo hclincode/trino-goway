@@ -181,11 +181,45 @@ Order enforced by dependency:
 - Gate to DECLARE proxy-core COMPLETE: differential harness (live Java↔Go side-by-side for Seams 1–8 + statement protocol)
 - G1 (`nextUri` host derivation against real Trino) must be the first QA gate — it's the only gap with a silent failure mode
 
-### v2 (Future, Not Committed)
-- MVEL replacement (CEL or `expr-lang/expr`) with file-based routing restored
-- SQL content routing (focused Go Trino SQL parser for the subset in `provideTableExtractionQueries`)
-- Oracle DB support
-- Per-routing-group database isolation
+---
+
+## Non-Prioritized Features
+
+Items in this section are not on the roadmap. They may be revisited based on operator demand, but no timeline is attached and no implementation work should begin without an explicit team-lead decision to promote them.
+
+### File-Based Routing Rules (MVEL replacement)
+
+Restore the `rulesType=FILE` routing mode using a Go-native expression language (CEL or `expr-lang/expr`) instead of MVEL. Would require:
+- Choosing an expression engine and porting all seven `routing_rules_*.yml` fixture files to the new syntax (breaking config change for operators)
+- Implementing per-request mutable `state` map, priority ordering, `if/else` action bodies
+- Hot-reload file watcher with deterministic reload-complete signal
+- Expression engine sandboxing (must block subprocess exec, filesystem access, network sockets — Java's MVEL config explicitly blocks `Process` and `Runtime`)
+
+CEL is the team's named recommendation if this is ever revisited (typed, sandboxed by construction, used in Kubernetes/Envoy/Istio). `expr-lang/expr` is the alternative (simpler API, lower operator friction, requires explicit sandboxing).
+
+Operators who need rule-based routing today should use the external routing selector.
+
+### SQL Content Routing
+
+Route queries based on parsed SQL — e.g. "if this query references catalog `hive`, send to cluster A." Requires a Go Trino SQL parser covering the statement forms in `TestRoutingGroupSelector.provideTableExtractionQueries` (~30 DDL/DML forms). No Go Trino parser exists as of 2026-05. Building one from the ANTLR grammar creates a permanent version-tracking burden as the Trino grammar evolves.
+
+Operators who need SQL-content routing today can forward the query body to their external routing service and parse it there.
+
+### Oracle Database Backend
+
+Support Oracle as a persistence backend for query history and cluster registry. Blocked on the absence of a cgo-free Go Oracle driver. v1 supports Postgres and MySQL only.
+
+### Per-Routing-Group Database Isolation
+
+Each routing group gets its own JDBC connection pool pointing at a separate database (`JdbcConnectionManager.getJdbi(routingGroupDatabase)` in the Java gateway). No confirmed operator use was found during the study phase. Dropped from scope.
+
+### `/v1/spooled/*` Sticky Routing via Cookie
+
+Multi-backend deployments with Trino's spooling enabled can currently receive spooled segment GETs (`/v1/spooled/*`) routed to the wrong cluster because the queryId-based sticky cache covers only `/v1/statement` polling paths. Fix: emit a `TG.*` cookie on statement-POST responses with `routingPaths` covering `/v1/spooled` and `/v1/spooled/ack`. Flagged by trino-expert; low operator impact unless spooling is enabled at scale.
+
+### Side-by-Side Preview Mode
+
+Run the Go gateway alongside the Java gateway in shadow-traffic mode: Go logs its routing decision for each request alongside what Java decided, without actually serving traffic. Useful for validating parity before cutover. Not required for v1; the differential harness in Phase 4 covers this for QA purposes.
 
 ---
 
