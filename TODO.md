@@ -18,13 +18,15 @@
 
 - [x] Task 9 — Discuss: Do we need a Go version of trino-gateway? (result: `topics/do-we-needs-golang-trino-gateway.md` — unanimous PROCEED WITH CAVEATS)
 
-## Phase 3: Architecture Design
+## Backlog
+
+### Phase 3: Architecture Design
 
 - [ ] Task 10 — Architect writes `phase2-gate-responses.architect.md` (library decisions, DI stance, streaming/oracle/cookie rulings, 6th hard invariant, Phase 2 sequencing constraints)
 - [ ] Task 11 — Go-implementer writes `SCOPE.md` (locked scope, deferred scope, reversal cost per item)
 - [ ] Task 12 — Go-implementer writes `gateway-cookies-and-sticky-routing.go-implementer.md` (cookie study; required before proxy implementation starts)
 
-## Phase 4: Implementation
+### Phase 4: Implementation
 
 Order enforced by dependency:
 
@@ -37,7 +39,7 @@ Order enforced by dependency:
 - [ ] Task 19 — `cmd/trino-goway` (main + wiring)
 - [ ] Task 20 — `cmd/goway-migrate-config` (config migration tool)
 
-## Phase 5: QA Gates
+### Phase 5: QA Gates
 
 - [ ] Task 21 — Build QA infra: port allocator + testcontainers-go postgres + goleak + misbehaving-backend fixture (gate to START proxy-core)
 - [ ] Task 22 — Build differential harness: live Java↔Go side-by-side for Seams 1–8 + statement protocol (gate to DECLARE proxy-core COMPLETE)
