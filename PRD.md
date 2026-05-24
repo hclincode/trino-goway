@@ -77,6 +77,12 @@ The third case is a hard failure, not degraded performance. Operators using loca
 
 ## Tend Not to Support
 
+### Side-by-Side Preview Mode
+
+Run the Go gateway in shadow-traffic mode alongside Java, logging its routing decision for each request without serving real traffic — intended to validate Go/Java routing parity before cutover.
+
+**Why this no longer applies:** when all routing logic lives in an external service (the only routing mode trino-goway supports), Go and Java both call the same service and get the same routing group by definition. There is no Go-vs-Java routing algorithm to compare. The premise of preview mode disappears. Cutover confidence comes from the Phase 4 differential harness (proxy behavior, not routing decisions) and a gradual traffic ramp.
+
 ### File-Based Routing Rules (MVEL)
 
 **Decision: Permanently out of scope. Will not be implemented.**
@@ -243,9 +249,6 @@ Support Oracle as a persistence backend for query history and cluster registry. 
 
 Each routing group gets its own JDBC connection pool pointing at a separate database (`JdbcConnectionManager.getJdbi(routingGroupDatabase)` in the Java gateway). No confirmed operator use was found during the study phase. Dropped from scope.
 
-### Side-by-Side Preview Mode
-
-Run the Go gateway alongside the Java gateway in shadow-traffic mode: Go logs its routing decision for each request alongside what Java decided, without actually serving traffic. Useful for validating parity before cutover. Not required for v1; the differential harness in Phase 4 covers this for QA purposes.
 
 ---
 
