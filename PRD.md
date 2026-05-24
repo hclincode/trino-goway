@@ -99,6 +99,18 @@ MVEL is evaluated at runtime against the incoming HTTP request, letting operator
 
 **Migration path:** run your routing logic as a small HTTP service. Point the gateway at it with `routing.rulesType=EXTERNAL`. The gateway POSTs request metadata (headers, user, client tags, query properties) as JSON; your service returns `{"routingGroup": "etl"}`. Any MVEL rule can be replicated in ~10 lines of Python, Go, or Node.
 
+### Header-Based Routing (`X-Trino-Routing-Group`)
+
+Route requests by reading the `X-Trino-Routing-Group` header directly, with no external service call. Trivial to implement (~10 LOC) but adds a second routing code path alongside external routing. The external routing service can implement this as a one-liner by reading the header from the forwarded request metadata.
+
+### File-Based Routing Rules (MVEL replacement)
+
+Restore `rulesType=FILE` using a Go-native expression language (CEL or `expr-lang/expr`) instead of MVEL. Would require choosing an expression engine, porting all seven `routing_rules_*.yml` fixtures to new syntax (breaking config change), implementing per-request mutable state, priority ordering, hot-reload, and expression engine sandboxing. CEL is the team's named recommendation (typed, sandboxed by construction). Operators who need rule-based routing today should use the external routing selector.
+
+### SQL Content Routing
+
+Route queries based on parsed SQL — e.g. "if this query references catalog `hive`, send to cluster A." No Go Trino SQL parser exists as of 2026-05. Building one from the ANTLR grammar creates a permanent version-tracking burden as Trino's grammar evolves. Operators can forward the query body to their external routing service and parse it there.
+
 ### Side-by-Side Preview Mode
 
 Run the Go gateway in shadow-traffic mode alongside Java, logging its routing decision for each request without serving real traffic — intended to validate Go/Java routing parity before cutover.
@@ -171,18 +183,6 @@ Order enforced by dependency:
 ## Non-Groomed Features
 
 Items in this section have no timeline and no implementation commitment. They may be promoted based on operator demand, but require an explicit team-lead decision to move forward.
-
-### Header-Based Routing (`X-Trino-Routing-Group`)
-
-Route requests by reading the `X-Trino-Routing-Group` header directly, with no external service call. Trivial to implement (~10 LOC) but adds a second routing code path alongside external routing. The external routing service can implement this as a one-liner by reading the header from the forwarded request metadata.
-
-### File-Based Routing Rules (MVEL replacement)
-
-Restore `rulesType=FILE` using a Go-native expression language (CEL or `expr-lang/expr`) instead of MVEL. Would require choosing an expression engine, porting all seven `routing_rules_*.yml` fixtures to new syntax (breaking config change), implementing per-request mutable state, priority ordering, hot-reload, and expression engine sandboxing. CEL is the team's named recommendation (typed, sandboxed by construction). Operators who need rule-based routing today should use the external routing selector.
-
-### SQL Content Routing
-
-Route queries based on parsed SQL — e.g. "if this query references catalog `hive`, send to cluster A." No Go Trino SQL parser exists as of 2026-05. Building one from the ANTLR grammar creates a permanent version-tracking burden as Trino's grammar evolves. Operators can forward the query body to their external routing service and parse it there.
 
 ### Oracle Database Backend
 
