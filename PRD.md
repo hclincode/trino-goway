@@ -51,6 +51,30 @@ External routing is the sole extensibility mechanism. Operators implement routin
 
 ---
 
+## Tend to Do
+
+Items in this section are planned but not committed to v1. They will be promoted to v1 scope or scheduled as a follow-on release based on implementation progress and operator demand.
+
+### `/v1/spooled/*` Sticky Routing via Cookie
+
+**Why it matters:** When Trino's spooling protocol is active, the coordinator generates `/v1/spooled/<token>` URLs for large result segments. These requests come back through the gateway. Without a sticky mechanism covering spooled paths, the gateway routes them to whichever backend the load balancer picks — which may not be the cluster holding the spooled data.
+
+**Impact by deployment type:**
+
+| Deployment | Impact if not implemented |
+|---|---|
+| Spooling disabled (most deployments) | None |
+| Spooling + shared object storage (S3/GCS/Azure Blob) | None — segment accessible from any cluster |
+| Spooling + local coordinator storage + multi-cluster | **Complete query failure** — segment GET lands on wrong cluster → 404 |
+
+The third case is a hard failure, not degraded performance. Operators using local spooling storage with multiple clusters cannot use trino-goway without this feature.
+
+**Proposed fix:** emit a `TG.*` cookie on POST `/v1/statement` responses with `routingPaths` covering `/v1/spooled` and `/v1/spooled/ack`, binding the client to the correct cluster for the duration of the result fetch. ~50 LOC; fits naturally into the cookie study deliverable.
+
+**Recommended action:** fold into the `gateway-cookies-and-sticky-routing.go-implementer.md` cookie study. Promote to v1 scope if the study confirms the implementation is straightforward alongside the existing cookie work.
+
+---
+
 ## Tend Not to Support
 
 ### File-Based Routing Rules (MVEL)
@@ -218,10 +242,6 @@ Support Oracle as a persistence backend for query history and cluster registry. 
 ### Per-Routing-Group Database Isolation
 
 Each routing group gets its own JDBC connection pool pointing at a separate database (`JdbcConnectionManager.getJdbi(routingGroupDatabase)` in the Java gateway). No confirmed operator use was found during the study phase. Dropped from scope.
-
-### `/v1/spooled/*` Sticky Routing via Cookie
-
-Multi-backend deployments with Trino's spooling enabled can currently receive spooled segment GETs (`/v1/spooled/*`) routed to the wrong cluster because the queryId-based sticky cache covers only `/v1/statement` polling paths. Fix: emit a `TG.*` cookie on statement-POST responses with `routingPaths` covering `/v1/spooled` and `/v1/spooled/ack`. Flagged by trino-expert; low operator impact unless spooling is enabled at scale.
 
 ### Side-by-Side Preview Mode
 
