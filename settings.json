@@ -1,5 +1,36 @@
 {
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch",
+      "Read",
+      "Write",
+      "Edit",
+      "Bash(git *)",
+      "Bash(find *)",
+      "Bash(ls *)",
+      "Bash(mkdir *)",
+      "Bash(cat *)",
+      "Bash(grep *)",
+      "Bash(go *)",
+      "Bash(wc *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(echo *)",
+      "Bash(cp *)",
+      "Bash(mv *)",
+      "Bash(touch *)",
+      "Bash(chmod *)",
+      "Bash(sed *)",
+      "Bash(awk *)",
+      "Bash(sort *)",
+      "Bash(uniq *)",
+      "Bash(diff *)",
+      "Bash(curl *)",
+      "Bash(jq *)"
+    ]
   }
 }
