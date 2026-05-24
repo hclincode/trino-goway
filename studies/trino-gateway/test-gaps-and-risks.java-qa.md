@@ -5,7 +5,7 @@ role: Java QA
 component: trino-gateway
 topics: [test-infra, cross-cutting, proxy-core, routing-engine, statement-protocol, observability]
 date: 2026-05-24
-status: draft
+status: approved
 risk: high
 version_pins:
   trino: 93e020bf9df756cae935c395c23f67dd9432a527
@@ -33,6 +33,7 @@ Risk register of trino-gateway behaviours that have thin or absent Java test cov
 | G2 | Multi-valued protocol header round-trip | proxy-core, statement-protocol | **HIGH** | wire-correctness |
 | G3 | Backend mid-query failure (connection reset, 5xx mid-poll) | proxy-core | **HIGH** | failure-mode |
 | G4 | `QueryCountBasedRouter` concurrency / parallel `selectBackend` | routing-engine | **HIGH** | concurrency |
+| G4a | Stochastic-router distribution (RandomBackendSelector with N equal-weight HEALTHY backends) | routing-engine | medium | concurrency / coverage |
 | G5 | Async timeout (Seam 6) — no explicit test | proxy-core | **HIGH** | failure-mode |
 | G6 | Response-body size cap behaviour (`responseSize`) | proxy-core | **HIGH** | failure-mode |
 | G7 | `searchAllBackendForQuery` `isDone()` race | routing-engine | medium | concurrency / known-bug |
@@ -80,8 +81,17 @@ Detail follows.
 ### G5 — Async timeout (Seam 6)
 
 - **Why it matters:** `ProxyRequestHandler` returns `502 BAD_GATEWAY` with body `"Request to remote Trino server timed out after<duration>"` when the configured `asyncTimeout` fires. Operators rely on this for SLA signalling; a regression that returns 504 instead, or silently hangs, is operationally damaging.
-- **Current Java coverage:** none that I located. The code path at `ProxyRequestHandler.java:239-247` is uncovered.
-- **What's needed:** mock backend that sleeps for `asyncTimeout + 100ms`; assert gateway returns 502 within `asyncTimeout + budget`; assert response body starts with the expected prefix. Cover the boundary: backend responds *exactly* at `asyncTimeout` (race condition — gateway should produce one of two outcomes consistently).
+- **Observable signals (must be asserted, not implied):**
+  - HTTP status `502 BAD_GATEWAY` (NOT 504, NOT 500, NOT 200-with-error-body).
+  - Response body starts with the exact prefix `"Request to remote Trino server timed out after"` followed by the configured duration.
+  - Wall-clock elapsed time between request dispatch and response: `asyncTimeout ± budget`, never indefinitely hung.
+  - No backend-side connection leak: the backend's in-flight request is cancelled / connection torn down, not left dangling for the full backend-side timeout.
+- **Current Java coverage:** none that I located. The code path at `ProxyRequestHandler.java:239-247` is uncovered by any direct test. Coverage state: **0% — purely defensive code that has never been exercised by a test.**
+- **What's needed:**
+  - Mock backend that sleeps for `asyncTimeout + 100ms`; assert gateway returns 502 within `asyncTimeout + budget`; assert response body starts with the expected prefix.
+  - Boundary test: backend responds *exactly* at `asyncTimeout` (race condition — gateway should produce one of two outcomes consistently, not flap).
+  - Backend-cancellation test: after the gateway returns 502, assert the backend either observed a client disconnect or received a cancellation, not that it ran the full request to completion in the background (resource leak).
+- **Cross-references:** Seam 6 in `[[proxy-request-lifecycle.java-qa.md]]`; this is the timeout half of the proxy-core degradation-test requirement in go-qa's component sign-off rubric. Pair with G3 (backend mid-query failure) — both are proxy-core failure-mode tests, both need the same "misbehaving backend" fixture.
 
 ### G6 — Response-body size cap
 

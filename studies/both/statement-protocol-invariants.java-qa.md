@@ -5,7 +5,7 @@ role: Java QA
 component: both
 topics: [statement-protocol, session-state, proxy-core]
 date: 2026-05-24
-status: peer-reviewed
+status: approved
 risk: high
 version_pins:
   trino: 93e020bf9df756cae935c395c23f67dd9432a527
