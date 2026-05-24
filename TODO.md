@@ -27,7 +27,7 @@
 - [ ] Task 12 — Go-implementer writes `gateway-cookies-and-sticky-routing.go-implementer.md` (cookie design: HMAC-SHA256 wire-compat with Java `GatewayCookie`, `wireCompat` config flag, `/v1/spooled/*` + `/v1/spooled/ack` sticky routing via `TG.*` cookie; required before proxy implementation starts)
 - [ ] Task 13 — trino-expert studies `/v1/spooled/*` URL structure in Trino source (`studies/trino/spooled-segment-protocol.trino-expert.md`): token format, whether queryId is encoded, redirect chain, and whether cookie is the only viable sticky mechanism
 - [ ] Task 14 — go-implementer studies `GatewayCookie.java` in depth (`studies/trino-gateway/gateway-cookie-internals.go-implementer.md`): HMAC-SHA256 payload format, `routingPaths` matching logic, cookie issue/validate/invalidate lifecycle; feeds into Task 12
-- [ ] Task 15 — java-analyst produces complete external routing JSON field inventory (`studies/trino-gateway/external-routing-contract.java-analyst.md`): all 12 fields, which are populated without `trino-parser`, operator-facing contract to pin before Task 16 (external selector) starts
+- [ ] Task 15 — java-analyst produces complete external routing contract study (`studies/trino-gateway/external-routing-contract.java-analyst.md`): all request fields (`RoutingGroupExternalBody`) and response fields (`ExternalRouterResponse`), which `trinoQueryProperties` sub-fields are empty without `trino-parser`, `propagateErrors` fallback behavior, header-forwarding and `excludeHeaders` policy; pin the exact JSON shapes that Go HTTP + gRPC transports must replicate
 - [ ] Task 16 — java-analyst or go-implementer catalogs admin REST API endpoints (`studies/trino-gateway/admin-api-surface.java-analyst.md`): all routes, request/response shapes, `@RolesAllowed` per endpoint; spec for Task 20 (`internal/admin`)
 
 ### Phase 4: Implementation
@@ -36,7 +36,7 @@ Order enforced by dependency:
 
 - [ ] Task 17 — `internal/config` + `internal/lifecycle` (YAML loader, custom unmarshalers for DataSize/Duration, explicit Start/Stop lifecycle)
 - [ ] Task 18 — `internal/persistence` (DAOs + goose migrations; Postgres + MySQL; query history + cluster registry tables)
-- [ ] Task 19 — `internal/routing` (external routing selector: HTTP API; queryId sticky-routing with 3-step cache-miss recovery chain; gRPC only if ruled in by Task 10)
+- [ ] Task 19 — `internal/routing` (external routing selector: HTTP + gRPC transports with identical field contract matching original `RoutingGroupExternalBody`/`ExternalRouterResponse`; queryId sticky-routing with 3-step cache-miss recovery chain; `propagateErrors` fallback; after Task 15 lands)
 - [ ] Task 20 — `internal/proxy` (reverse proxy core: Trino statement protocol, `nextUri` polling, gateway cookies, `/v1/spooled/*` sticky routing via `TG.*` cookie, header forwarding; after Tasks 12–14 land)
 - [ ] Task 21 — `internal/monitor` (cluster health monitoring + backend registry; three separate `*http.Client` instances for proxy/monitor/external-routing)
 - [ ] Task 22 — `internal/auth` (OAuth2/OIDC + LDAP + noop; JWKS TTL caching)

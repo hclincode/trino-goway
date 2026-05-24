@@ -23,13 +23,44 @@
 
 ## Routing Strategy
 
-**v1 supports one routing mode:**
+**v1 supports one routing mode with two transports:**
 
-| Mode | How it works |
+| Transport | How it works |
 |---|---|
-| **External routing** | Gateway POSTs request metadata to an operator-run HTTP or gRPC service; service returns the routing group |
+| **HTTP** | Gateway POSTs a JSON envelope to a configured URL; service returns a JSON response |
+| **gRPC** | Gateway calls a configured gRPC endpoint with the same fields; service returns the same response shape |
 
-External routing is the sole extensibility mechanism. Operators implement routing logic in their own service in any language they choose. The gateway is not the logic host.
+Both transports carry identical request and response fields. The field contract matches the original trino-gateway exactly so operators can reuse existing external routing services.
+
+### External Routing Contract
+
+**Request fields** (same as `RoutingGroupExternalBody` in the original):
+
+| Field | Type | Notes |
+|---|---|---|
+| `trinoQueryProperties` | object | SQL-parsed properties; fields requiring `trino-parser` (tables, catalogs, schemas, queryType) will be empty — SQL content routing is not supported in v1 |
+| `trinoRequestUser` | object | Authenticated user info |
+| `contentType` | string | Request `Content-Type` header |
+| `remoteUser` | string | Remote user from request |
+| `method` | string | HTTP method |
+| `requestUri` | string | Request URI |
+| `queryString` | string | Query string |
+| `session` | string | Session info |
+| `remoteAddr` | string | Client remote address |
+| `remoteHost` | string | Client remote host |
+| `parameterMap` | map | Request parameter map |
+
+**Response fields** (same as `ExternalRouterResponse` in the original):
+
+| Field | Type | Notes |
+|---|---|---|
+| `routingGroup` | string | Target routing group name |
+| `externalHeaders` | map | Headers to inject into the forwarded request (REPLACE semantics — see Hard Invariants) |
+| `errors` | array | Error strings; if non-empty and `propagateErrors=true`, gateway returns HTTP 400 to the client |
+
+**Fallback behavior:** if the external service is unreachable, returns an error, or returns invalid JSON — the gateway falls back gracefully and routes the request to the default routing group. No request is dropped.
+
+External routing is the sole routing extensibility mechanism. Operators implement routing logic in their own service in any language they choose. The gateway is not the logic host.
 
 ---
 
