@@ -148,6 +148,7 @@ Run the Go gateway in shadow-traffic mode alongside Java, logging its routing de
 Earliest deliverables (required before implementation starts):
 1. `phase2-gate-responses.architect.md` — all library decisions, DI stance, streaming/oracle/cookie rulings, sequencing constraints
 2. `gateway-cookies-and-sticky-routing.go-implementer.md` — cookie design study (required before proxy implementation)
+3. `SCOPE.md` — locked scope, deferred scope, and reversal cost per item; team-lead sign-off required to change any ruling
 
 ### Phase 3 — Implementation
 Order enforced by dependency:
@@ -190,10 +191,6 @@ Support Oracle as a persistence backend. Blocked on the absence of a cgo-free Go
 ### Per-Routing-Group Database Isolation
 
 Each routing group gets its own database connection pool. No confirmed operator use was found during the study phase.
-
-### `SCOPE.md` Artifact
-
-A written document listing locked scope, deferred scope, and the reversal cost per item. Useful for preventing scope creep during implementation. Low effort; promote to Phase 2 deliverable if the team decides to formalize scope governance.
 
 ---
 
