@@ -45,32 +45,9 @@ External routing is the sole extensibility mechanism. Operators implement routin
 - Admin REST API
 - Web UI (serve existing Java-compiled static bundle unchanged)
 - Config migration tool (`goway-migrate-config`) for one-shot conversion from Java YAML
+- `/v1/spooled/*` sticky routing via cookie — emit a `TG.*` cookie on POST `/v1/statement` responses covering `/v1/spooled` and `/v1/spooled/ack`; required for operators running Trino spooling with local coordinator storage across multiple clusters (segment GETs routed to wrong cluster → complete query failure without this)
 
 **Size estimate:** ~2,500–3,000 LOC (vs 13,600 in Java). QA: ~9–13 person-days.
-
----
-
-## Tend to Do
-
-Items in this section are planned but not committed to v1. They will be promoted to v1 scope or scheduled as a follow-on release based on implementation progress and operator demand.
-
-### `/v1/spooled/*` Sticky Routing via Cookie
-
-**Why it matters:** When Trino's spooling protocol is active, the coordinator generates `/v1/spooled/<token>` URLs for large result segments. These requests come back through the gateway. Without a sticky mechanism covering spooled paths, the gateway routes them to whichever backend the load balancer picks — which may not be the cluster holding the spooled data.
-
-**Impact by deployment type:**
-
-| Deployment | Impact if not implemented |
-|---|---|
-| Spooling disabled (most deployments) | None |
-| Spooling + shared object storage (S3/GCS/Azure Blob) | None — segment accessible from any cluster |
-| Spooling + local coordinator storage + multi-cluster | **Complete query failure** — segment GET lands on wrong cluster → 404 |
-
-The third case is a hard failure, not degraded performance. Operators using local spooling storage with multiple clusters cannot use trino-goway without this feature.
-
-**Proposed fix:** emit a `TG.*` cookie on POST `/v1/statement` responses with `routingPaths` covering `/v1/spooled` and `/v1/spooled/ack`, binding the client to the correct cluster for the duration of the result fetch. ~50 LOC; fits naturally into the cookie study deliverable.
-
-**Recommended action:** fold into the `gateway-cookies-and-sticky-routing.go-implementer.md` cookie study. Promote to v1 scope if the study confirms the implementation is straightforward alongside the existing cookie work.
 
 ---
 
