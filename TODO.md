@@ -20,28 +20,32 @@
 
 ## Backlog
 
-### Phase 3: Architecture Design
+### Phase 3: Architecture Design + Targeted Studies
 
-- [ ] Task 10 — Architect writes `phase2-gate-responses.architect.md` (library decisions, DI stance, streaming/oracle/cookie rulings, 6th hard invariant, sequencing constraints)
+- [ ] Task 10 — Architect writes `phase2-gate-responses.architect.md` (library decisions, DI stance, streaming/oracle/cookie rulings, 6th hard invariant, sequencing constraints; includes ruling on gRPC in v1 vs. Non-Groomed)
 - [ ] Task 11 — Go-implementer writes `SCOPE.md` (locked scope, deferred scope, reversal cost per item; team-lead sign-off required to change any ruling)
 - [ ] Task 12 — Go-implementer writes `gateway-cookies-and-sticky-routing.go-implementer.md` (cookie design: HMAC-SHA256 wire-compat with Java `GatewayCookie`, `wireCompat` config flag, `/v1/spooled/*` + `/v1/spooled/ack` sticky routing via `TG.*` cookie; required before proxy implementation starts)
+- [ ] Task 13 — trino-expert studies `/v1/spooled/*` URL structure in Trino source (`studies/trino/spooled-segment-protocol.trino-expert.md`): token format, whether queryId is encoded, redirect chain, and whether cookie is the only viable sticky mechanism
+- [ ] Task 14 — go-implementer studies `GatewayCookie.java` in depth (`studies/trino-gateway/gateway-cookie-internals.go-implementer.md`): HMAC-SHA256 payload format, `routingPaths` matching logic, cookie issue/validate/invalidate lifecycle; feeds into Task 12
+- [ ] Task 15 — java-analyst produces complete external routing JSON field inventory (`studies/trino-gateway/external-routing-contract.java-analyst.md`): all 12 fields, which are populated without `trino-parser`, operator-facing contract to pin before Task 16 (external selector) starts
+- [ ] Task 16 — java-analyst or go-implementer catalogs admin REST API endpoints (`studies/trino-gateway/admin-api-surface.java-analyst.md`): all routes, request/response shapes, `@RolesAllowed` per endpoint; spec for Task 20 (`internal/admin`)
 
 ### Phase 4: Implementation
 
 Order enforced by dependency:
 
-- [ ] Task 13 — `internal/config` + `internal/lifecycle` (YAML loader, custom unmarshalers for DataSize/Duration, explicit Start/Stop lifecycle)
-- [ ] Task 14 — `internal/persistence` (DAOs + goose migrations; Postgres + MySQL; query history + cluster registry tables)
-- [ ] Task 15 — `internal/routing` (external routing selector: HTTP API + gRPC; queryId sticky-routing with 3-step cache-miss recovery chain)
-- [ ] Task 16 — `internal/proxy` (reverse proxy core: Trino statement protocol, `nextUri` polling, gateway cookies, `/v1/spooled/*` sticky routing via `TG.*` cookie, header forwarding; after Task 12 lands)
-- [ ] Task 17 — `internal/monitor` (cluster health monitoring + backend registry; three separate `*http.Client` instances for proxy/monitor/external-routing)
-- [ ] Task 18 — `internal/auth` (OAuth2/OIDC + LDAP + noop; JWKS TTL caching)
-- [ ] Task 19 — `internal/admin` (admin REST API)
-- [ ] Task 20 — `cmd/trino-goway` (main + constructor wiring + embed web UI static bundle from Java repo)
-- [ ] Task 21 — `cmd/goway-migrate-config` (one-shot Java YAML → Go YAML config migration tool)
+- [ ] Task 17 — `internal/config` + `internal/lifecycle` (YAML loader, custom unmarshalers for DataSize/Duration, explicit Start/Stop lifecycle)
+- [ ] Task 18 — `internal/persistence` (DAOs + goose migrations; Postgres + MySQL; query history + cluster registry tables)
+- [ ] Task 19 — `internal/routing` (external routing selector: HTTP API; queryId sticky-routing with 3-step cache-miss recovery chain; gRPC only if ruled in by Task 10)
+- [ ] Task 20 — `internal/proxy` (reverse proxy core: Trino statement protocol, `nextUri` polling, gateway cookies, `/v1/spooled/*` sticky routing via `TG.*` cookie, header forwarding; after Tasks 12–14 land)
+- [ ] Task 21 — `internal/monitor` (cluster health monitoring + backend registry; three separate `*http.Client` instances for proxy/monitor/external-routing)
+- [ ] Task 22 — `internal/auth` (OAuth2/OIDC + LDAP + noop; JWKS TTL caching)
+- [ ] Task 23 — `internal/admin` (admin REST API; after Task 16 lands)
+- [ ] Task 24 — `cmd/trino-goway` (main + constructor wiring + embed web UI static bundle from Java repo)
+- [ ] Task 25 — `cmd/goway-migrate-config` (one-shot Java YAML → Go YAML config migration tool)
 
 ### Phase 5: QA Gates
 
-- [ ] Task 22 — Build QA infra: port allocator + testcontainers-go Postgres + goleak + misbehaving-backend fixture (gate to START proxy-core landing)
-- [ ] Task 23 — G1 test: `nextUri` host derivation against real Trino container (first QA gate; the only gap with a silent failure mode)
-- [ ] Task 24 — Build differential harness: live Java↔Go side-by-side for proxy Seams 1–8 + statement protocol (gate to DECLARE proxy-core COMPLETE)
+- [ ] Task 26 — Build QA infra: port allocator + testcontainers-go Postgres + goleak + misbehaving-backend fixture (gate to START proxy-core landing)
+- [ ] Task 27 — G1 test: `nextUri` host derivation against real Trino container (first QA gate; the only gap with a silent failure mode)
+- [ ] Task 28 — Build differential harness: live Java↔Go side-by-side for proxy Seams 1–8 + statement protocol (gate to DECLARE proxy-core COMPLETE)
