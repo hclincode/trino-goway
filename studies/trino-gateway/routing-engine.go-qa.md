@@ -11,9 +11,9 @@ version_pins:
   trino: 93e020bf9df756cae935c395c23f67dd9432a527
   trino-gateway: 334ba1226c3073af1eb4d0000fbd2a17f80088a9
 related-to:
-  - trino-gateway/test-infrastructure-inventory.go-qa.md
-  - trino-gateway/proxy-lifecycle-testable-seams.go-qa.md
-  - trino-gateway/qa-gaps-and-risks.go-qa.md
+  - trino-gateway/test-infrastructure.go-qa.md
+  - trino-gateway/proxy-request-lifecycle.go-qa.md
+  - trino-gateway/test-gaps-and-risks.go-qa.md
 ---
 
 # Routing engine — existing test oracle and Go parity strategy
@@ -41,7 +41,7 @@ related-to:
   - `routing_rules_update.yml` — fixture used by `testByRoutingRulesEngineFileChange` (`:345-392`) to seed the initial rule before the file-watch reload test overwrites it. Purpose: hot-reload oracle's "before" state.
   - Cite (driver): `TestRoutingGroupSelector.java:72-80` (the `provideRoutingRuleConfigFiles` source method only enumerates the four-equivalent set); the other three fixtures are referenced by name in their specific test methods.
   - Signal: `routingGroup` equals `"etl"` when source is airflow alone; `"etl-special"` when also tagged `label=special`; `null` when source isn't airflow. For the trino-query-properties fixture: `"will-group"`/`"tbl-group"`/`"catalog-schema-group"`/`"type-group"`/`"resource-group-type-group"` per the seven sub-method oracles below.
-  - **MVEL parity caveat (whole-fixture-set):** the *inputs* (header sets, request bodies, SQL strings) and the *outputs* (expected routing-group strings) port verbatim to Go and form the seven-fixture-worth of behavioral oracle. The *rule expressions themselves* (the MVEL bodies in each YAML's `condition`/`actions` field) cannot port until the Go DSL is chosen — see the rule-language decision in `qa-gaps-and-risks.go-qa.md` and the Implications section below. Tracking this split: write the Go fixtures as YAML stubs with the same `name`/`priority`/`description` skeletons and a `condition: TODO(go-dsl)` placeholder; populate `condition`/`actions` only once the architect's DSL choice lands.
+  - **MVEL parity caveat (whole-fixture-set):** the *inputs* (header sets, request bodies, SQL strings) and the *outputs* (expected routing-group strings) port verbatim to Go and form the seven-fixture-worth of behavioral oracle. The *rule expressions themselves* (the MVEL bodies in each YAML's `condition`/`actions` field) cannot port until the Go DSL is chosen — see the rule-language decision in `test-gaps-and-risks.go-qa.md` and the Implications section below. Tracking this split: write the Go fixtures as YAML stubs with the same `name`/`priority`/`description` skeletons and a `condition: TODO(go-dsl)` placeholder; populate `condition`/`actions` only once the architect's DSL choice lands.
 
 - **Sibling corpora worth lifting into the same test package:** beyond the seven rule fixtures, two table-driven oracles in adjacent test classes belong to the same routing test surface and should port together so reviewers see the routing-decision oracle in one place:
   - **URL → query-ID extraction table** (`TestQueryIdCachingProxyHandler.testExtractQueryIdFromUrl`, `:38-71`): 15 URL-pattern cases covering `queued`/`scheduled`/`executing`/`partialCancel`, custom statement paths, `/v1/query/...`, `/ui/api/query/...{,/killed,/preempted}`, `/ui/troubleshooting?queryId=...`, `/ui/query.html?<queryId>`, `/login?redirect=...`, plus three negative cases. **Lift verbatim as a Go table-test; pure function, no rule engine involved.** This oracle is the URL-side companion to the routing-decision oracle and shares the same fixture-corpus shape.
@@ -75,7 +75,7 @@ related-to:
   - Cite: `:394-499` and continues beyond (file is long).
   - Covers: `ALTER TABLE/SCHEMA/VIEW`, `CREATE TABLE/VIEW/SCHEMA/CATALOG/MATERIALIZED VIEW`, `DROP TABLE/SCHEMA/CATALOG`, `DESCRIBE`, `SHOW CREATE`, `SHOW SCHEMAS`, `SHOW TABLES`, `ALTER ... SET AUTHORIZATION`.
   - **This is the single most valuable artifact for Go testing.** It is a behavioral spec for the SQL parser's catalog/schema/table extraction. Every row should become a Go table-test entry.
-  - **Blocker**: the underlying parser is `io.trino.sql.SqlParser` (trino-parser, JVM-only). For Go we need either (a) trino-parser-go (does not exist as of 2026-05) or (b) a focused Go parser that handles the subset of DDL/queries in this oracle. The oracle's 30+ entries are tractable; this is more like "write a focused Go parser" than "write a full SQL parser" — see `qa-gaps-and-risks.go-qa.md`.
+  - **Blocker**: the underlying parser is `io.trino.sql.SqlParser` (trino-parser, JVM-only). For Go we need either (a) trino-parser-go (does not exist as of 2026-05) or (b) a focused Go parser that handles the subset of DDL/queries in this oracle. The oracle's 30+ entries are tractable; this is more like "write a focused Go parser" than "write a full SQL parser" — see `test-gaps-and-risks.go-qa.md`.
 
 - **External-router selector**: `RoutingGroupSelector.byRoutingExternal` posts request metadata to a configured URL and uses the returned `routingGroup` from a JSON response.
   - Cite: `RoutingGroupSelector.java:52-58`; test `TestExternalRoutingGroupSelector.java`.
@@ -124,7 +124,7 @@ When `cookiesEnabled=true`, the `RoutingTargetHandler.getPreviousCluster` path c
 - **Observed behavior:** Rules are MVEL 2 expressions evaluated by `org.mvel2.MVEL` against a request object.
 - **Source of behavior:** `defensive-historical` — MVEL was a convenient JVM-embeddable scripting language at the time of the original gateway design.
 - **Rationale:** Lets operators author rules in a familiar Java-like expression syntax without recompiling.
-- **Go obligation:** `replicate-intent`, not `replicate-exactly`. There is no Go MVEL interpreter. Aligning with java-qa's three-option list (`routing-engine.java-qa.md` §"MVEL expression language for rules"): (a) embed a Go expression engine (CEL or `expr-lang/expr`) — my recommendation, with CEL as the specific instance; (b) sidecar MVEL evaluator behind the external-router API; (c) structured non-Turing-complete rule schema. See `qa-gaps-and-risks.go-qa.md` for parity-risk discussion.
+- **Go obligation:** `replicate-intent`, not `replicate-exactly`. There is no Go MVEL interpreter. Aligning with java-qa's three-option list (`routing-engine.java-qa.md` §"MVEL expression language for rules"): (a) embed a Go expression engine (CEL or `expr-lang/expr`) — my recommendation, with CEL as the specific instance; (b) sidecar MVEL evaluator behind the external-router API; (c) structured non-Turing-complete rule schema. See `test-gaps-and-risks.go-qa.md` for parity-risk discussion.
 - **Notes:** Whatever the choice, we LOSE the ability to use the existing MVEL rule files verbatim. We can however lift the *behavioral assertions* from `TestRoutingGroupSelector` (input request → expected routing group) verbatim by writing equivalent Go rule files for each Java fixture.
 
 ### Routing-rules YAML structure
@@ -160,7 +160,7 @@ When `cookiesEnabled=true`, the `RoutingTargetHandler.getPreviousCluster` path c
   - Unit: header-based selector, query-ID URL extraction (already cited), priority ordering of rules.
   - Unit (with parsed input): each row of `provideTableExtractionQueries` becomes a Go test case.
   - Integration: rule-engine end-to-end against a `httptest.Server` backend, asserting which backend received the request.
-  - Differential (proposed): identical request → both Java and Go gateway → same routing group. Requires a Java gateway in a testcontainer; see `qa-gaps-and-risks.go-qa.md` for cost.
+  - Differential (proposed): identical request → both Java and Go gateway → same routing group. Requires a Java gateway in a testcontainer; see `test-gaps-and-risks.go-qa.md` for cost.
 - **Fixtures required:** rule YAML files translated to whatever Go DSL we pick; query-string oracle table from `TestRoutingGroupSelector.provideTableExtractionQueries`; example invalid SQL strings for parse-failure fallback test.
 - **Observable signals:** routing-group string equality (predominant), `TrinoQueryProperties.isQueryParsingSuccessful` boolean, parse error `Optional<String>` presence, backend-side recorded request bearing externally-injected headers, log substring `"Failed to parse routing rule"` (if Go rule loader logs that — not present in Java per my search).
 - **Non-determinism risks:**
@@ -177,6 +177,6 @@ When `cookiesEnabled=true`, the `RoutingTargetHandler.getPreviousCluster` path c
 
 ## Cross-references
 
-- [[test-infrastructure-inventory.go-qa.md]] — tooling inventory.
-- [[proxy-lifecycle-testable-seams.go-qa.md]] — proxy-side seams (routing target is seam 1).
-- [[qa-gaps-and-risks.go-qa.md]] — MVEL and trino-parser entanglement, gaps in Java test coverage.
+- [[test-infrastructure.go-qa.md]] — tooling inventory.
+- [[proxy-request-lifecycle.go-qa.md]] — proxy-side seams (routing target is seam 1).
+- [[test-gaps-and-risks.go-qa.md]] — MVEL and trino-parser entanglement, gaps in Java test coverage.

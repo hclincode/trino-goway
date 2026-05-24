@@ -11,9 +11,9 @@ version_pins:
   trino: 93e020bf9df756cae935c395c23f67dd9432a527
   trino-gateway: 334ba1226c3073af1eb4d0000fbd2a17f80088a9
 related-to:
-  - trino-gateway/test-infrastructure-inventory.go-qa.md
-  - trino-gateway/proxy-lifecycle-testable-seams.go-qa.md
-  - trino-gateway/routing-engine-test-oracle.go-qa.md
+  - trino-gateway/test-infrastructure.go-qa.md
+  - trino-gateway/proxy-request-lifecycle.go-qa.md
+  - trino-gateway/routing-engine.go-qa.md
 ---
 
 # QA gaps and high-risk untested behaviors in trino-gateway
@@ -189,7 +189,7 @@ The Java rule engine uses MVEL 2 (`io.trino.gateway.ha.router.MVELRoutingRule`).
 
 ## Cross-references
 
-- [[test-infrastructure-inventory.go-qa.md]]
-- [[proxy-lifecycle-testable-seams.go-qa.md]]
-- [[routing-engine-test-oracle.go-qa.md]]
+- [[test-infrastructure.go-qa.md]]
+- [[proxy-request-lifecycle.go-qa.md]]
+- [[routing-engine.go-qa.md]]
 - [[test-pyramid-strategy.qa-tech-lead.md]] — QA Tech Lead's pyramid (informs the test-level decisions referenced throughout this study)

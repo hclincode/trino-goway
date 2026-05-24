@@ -11,9 +11,9 @@ version_pins:
   trino: 93e020bf9df756cae935c395c23f67dd9432a527
   trino-gateway: 334ba1226c3073af1eb4d0000fbd2a17f80088a9
 related-to:
-  - trino-gateway/proxy-lifecycle-testable-seams.go-qa.md
-  - trino-gateway/routing-engine-test-oracle.go-qa.md
-  - trino-gateway/qa-gaps-and-risks.go-qa.md
+  - trino-gateway/proxy-request-lifecycle.go-qa.md
+  - trino-gateway/routing-engine.go-qa.md
+  - trino-gateway/test-gaps-and-risks.go-qa.md
   - trino-gateway/test-pyramid-strategy.qa-tech-lead.md
   - both/test-infrastructure-needs.qa-tech-lead.md
 ---
@@ -58,7 +58,7 @@ The Java repo ships 57 JUnit 5 test classes split between (a) JVM-only unit test
 
 - Routing-rule fixtures: YAML rule files in `src/test/resources/rules/` (`routing_rules_atomic.yml`, `routing_rules_priorities.yml`, `routing_rules_if_statements.yml`, `routing_rules_state.yml`, `routing_rules_trino_query_properties.yml`, `routing_rules_concurrent.yml`, `routing_rules_update.yml`). Loaded by `RoutingGroupSelector.byRoutingRulesEngine(rulesConfigPath, ...)`.
   - Cite: `TestRoutingGroupSelector.java:72-80`.
-  - These fixtures bake in MVEL syntax (`condition: "request.getHeader(...) == 'airflow'"`, `actions: "result.put(...)"`). They are NOT directly portable to Go — MVEL is a JVM expression language with no Go interpreter. See `qa-gaps-and-risks.go-qa.md` for the implication.
+  - These fixtures bake in MVEL syntax (`condition: "request.getHeader(...) == 'airflow'"`, `actions: "result.put(...)"`). They are NOT directly portable to Go — MVEL is a JVM expression language with no Go interpreter. See `test-gaps-and-risks.go-qa.md` for the implication.
 
 - Test bootstrap: Integration tests start the full gateway by calling `HaGatewayLauncher.main(new String[]{ configFile })`, which initializes Guice modules, the Jetty HTTP server, the routing manager, the DB connection pool, etc. There is no equivalent `main(args)` pattern in Go test code; we'll wire components via constructor injection in tests and only call `cmd/trino-goway` end-to-end for true e2e tests.
   - Cite: `TestProxyRequestHandler.java:102-105`.
@@ -77,7 +77,7 @@ The Java repo ships 57 JUnit 5 test classes split between (a) JVM-only unit test
   - Cluster-state enum (`TrinoStatus.HEALTHY` / `UNHEALTHY`) — `TestClusterStatsMonitor.java:93,144,177,185`.
   - Backend-side observation: recorded request path/method/headers/body via `MockWebServer.takeRequest()` (used elsewhere in `TestGatewayHaMultipleBackend`).
   - Negative signals: assertion that an `Optional` is empty when parse target is invalid — `TestQueryIdCachingProxyHandler.java:66-71`.
-  - No log-line assertions found in the Java suite. **This is a gap** — log substring assertions appear nowhere, so we have no oracle for "the gateway logs the routing decision in format X." See `qa-gaps-and-risks.go-qa.md`.
+  - No log-line assertions found in the Java suite. **This is a gap** — log substring assertions appear nowhere, so we have no oracle for "the gateway logs the routing decision in format X." See `test-gaps-and-risks.go-qa.md`.
   - No metric-name assertions found in the Java suite. Likewise a gap.
 
 - Race / concurrency tooling in the Java suite: none observed. The Java tests rely on the JVM memory model and Mockito's thread-safety; there is no equivalent of `go test -race`. **This means the Java suite cannot tell us whether the gateway has data races** — we discover those only in Go. We should commit to `-race` in CI from day one and `goleak` in every package that spawns goroutines.
@@ -132,7 +132,7 @@ The Java repo ships 57 JUnit 5 test classes split between (a) JVM-only unit test
 - **Test layering:** Unit tests for routing-rule evaluation, query-ID extraction, header forwarding rules, and request parsing should be table-driven and not touch the network. Integration tests for full proxy behavior should use `httptest.Server` for fake backends and `testcontainers-go` Trino only where real Trino behavior matters (cluster-stats monitors, OAuth handoff, end-to-end query lifecycle).
 - **Integration-test build tag:** Use `//go:build integration` for testcontainers-based tests so `go test ./...` stays fast for developers without Docker running.
 - **CI must run `-race` and `goleak` from day one** — the Java suite has no equivalent guard, so any concurrency bug in the Go rewrite will only be caught by Go's tooling.
-- **Rule-file fixtures cannot be reused verbatim.** The four rule YAML files we want to reuse for differential testing (`routing_rules_atomic.yml`, `routing_rules_priorities.yml`, `routing_rules_if_statements.yml`, `routing_rules_state.yml`) all embed MVEL syntax. Either (a) we choose a Go expression language and rewrite the fixtures, or (b) we declare a config-format break and translate to a Go-friendly DSL. See `qa-gaps-and-risks.go-qa.md` for the cost.
+- **Rule-file fixtures cannot be reused verbatim.** The four rule YAML files we want to reuse for differential testing (`routing_rules_atomic.yml`, `routing_rules_priorities.yml`, `routing_rules_if_statements.yml`, `routing_rules_state.yml`) all embed MVEL syntax. Either (a) we choose a Go expression language and rewrite the fixtures, or (b) we declare a config-format break and translate to a Go-friendly DSL. See `test-gaps-and-risks.go-qa.md` for the cost.
 - **Differential testing is the most reliable parity oracle.** Confirmed in scope by qa-tech-lead: live Java gateway in CI gated to nightly; record/replay smoke per PR. Full design in `studies/both/test-infrastructure-needs.qa-tech-lead.md` item 4 — architect sign-off required before the harness is built.
 
 ## Test Strategy Hooks
@@ -157,8 +157,8 @@ The Java repo ships 57 JUnit 5 test classes split between (a) JVM-only unit test
 
 ## Cross-references
 
-- [[proxy-lifecycle-testable-seams.go-qa.md]] — companion study of the proxy lifecycle from a seam-identification angle.
-- [[routing-engine-test-oracle.go-qa.md]] — what the existing routing tests cover and what we lift directly.
-- [[qa-gaps-and-risks.go-qa.md]] — untested behaviors and MVEL parity risk.
+- [[proxy-request-lifecycle.go-qa.md]] — companion study of the proxy lifecycle from a seam-identification angle.
+- [[routing-engine.go-qa.md]] — what the existing routing tests cover and what we lift directly.
+- [[test-gaps-and-risks.go-qa.md]] — untested behaviors and MVEL parity risk.
 - [[../trino-gateway/test-pyramid-strategy.qa-tech-lead.md]] — the proposed test-pyramid shape for the rewrite (qa-tech-lead).
 - [[../both/test-infrastructure-needs.qa-tech-lead.md]] — consolidated test-infra stack and differential-harness design.

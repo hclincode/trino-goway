@@ -11,9 +11,9 @@ version_pins:
   trino: 93e020bf9df756cae935c395c23f67dd9432a527
   trino-gateway: 334ba1226c3073af1eb4d0000fbd2a17f80088a9
 related-to:
-  - trino-gateway/test-infrastructure-inventory.go-qa.md
-  - trino-gateway/routing-engine-test-oracle.go-qa.md
-  - trino-gateway/qa-gaps-and-risks.go-qa.md
+  - trino-gateway/test-infrastructure.go-qa.md
+  - trino-gateway/routing-engine.go-qa.md
+  - trino-gateway/test-gaps-and-risks.go-qa.md
   - trino-gateway/proxy-request-lifecycle.java-qa.md
 ---
 
@@ -39,7 +39,7 @@ Entry point: `RoutingTargetHandler.resolveRouting(HttpServletRequest)` returns a
   - `customHeaders` is `Map<String, String>` (single-value); a multi-value inbound header (e.g. two `X-Trino-Session` values) collapses to the single wrapper value when shadowed.
   - `getHeaderNames()` returns the union (distinct) of inbound + wrapper names, so a wrapper-only name appears exactly once (`:143-150`).
   - The wrapper is a no-op when `externalHeaders().isEmpty()` is true — non-external selectors do not pay this overhead and produce no behavior difference here.
-  - **Canonical Go test shape (lift verbatim from [[routing-engine-test-oracle.go-qa.md]] Routing-decision-protocol-contract):** external returns `{X-Trino-User: override, X-Custom: new}`; client sends `{X-Trino-User: original, X-Other: keep}`; backend sees `{X-Trino-User: override, X-Other: keep, X-Custom: new}`; plus a fourth assertion that a multi-value `X-Trino-Session` (rule sets one value, client sent two) collapses to the single wrapper value on the backend.
+  - **Canonical Go test shape (lift verbatim from [[routing-engine.go-qa.md]] Routing-decision-protocol-contract):** external returns `{X-Trino-User: override, X-Custom: new}`; client sends `{X-Trino-User: original, X-Other: keep}`; backend sees `{X-Trino-User: override, X-Other: keep, X-Custom: new}`; plus a fourth assertion that a multi-value `X-Trino-Session` (rule sets one value, client sent two) collapses to the single wrapper value on the backend.
 - Test seam in Go: a `RoutingTargetResolver` interface accepting `*http.Request` and returning a `RoutingDestination`. Unit-testable with `httptest.NewRequest`; no network needed. The external-headers REPLACE behavior is testable as either (a) a thin `http.Header` mutation step that runs post-resolution and pre-forward, or (b) a `RoundTripper` middleware — either way, the assertion shape above pins the contract.
 
 ### Seam 2 — backend URI build
@@ -215,6 +215,6 @@ Configured patterns (regex) that bypass authentication and route as proxy reques
 
 ## Cross-references
 
-- [[test-infrastructure-inventory.go-qa.md]] — overall tooling inventory.
-- [[routing-engine-test-oracle.go-qa.md]] — routing-rule oracle in detail.
-- [[qa-gaps-and-risks.go-qa.md]] — including the MVEL parity problem.
+- [[test-infrastructure.go-qa.md]] — overall tooling inventory.
+- [[routing-engine.go-qa.md]] — routing-rule oracle in detail.
+- [[test-gaps-and-risks.go-qa.md]] — including the MVEL parity problem.
