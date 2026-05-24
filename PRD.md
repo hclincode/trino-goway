@@ -14,7 +14,7 @@
 
 ## Goals
 
-- Drop-in replacement for `trino-gateway` for the common operator configuration (external routing, header routing, query stickiness)
+- Drop-in replacement for `trino-gateway` for the common operator configuration (external routing, query stickiness)
 - Single static binary; no JVM runtime required
 - Fix two known Java bugs: response body truncation on large spooled segments, per-request JWKS fetching with no caching
 - Go's race detector and goroutine-leak tooling provide correctness guarantees the Java suite cannot
@@ -23,14 +23,13 @@
 
 ## Routing Strategy
 
-**v1 supports two routing modes only:**
+**v1 supports one routing mode:**
 
 | Mode | How it works |
 |---|---|
-| **Header routing** | Client sets `X-Trino-Routing-Group: <group>`; gateway routes to that group |
 | **External routing** | Gateway POSTs request metadata to an operator-run HTTP or gRPC service; service returns the routing group |
 
-External routing is the primary extensibility mechanism. Operators who need complex routing logic (SQL-content-based, user-attribute-based, multi-rule composition) implement it in their own service in any language they choose. The gateway is not the logic host.
+External routing is the sole extensibility mechanism. Operators implement routing logic in their own service in any language they choose. The gateway is not the logic host.
 
 ---
 
@@ -38,7 +37,6 @@ External routing is the primary extensibility mechanism. Operators who need comp
 
 - HTTP reverse proxy core — Trino statement protocol, `nextUri` polling, sticky routing by queryId
 - External routing selector (HTTP API + gRPC)
-- Header-based routing selector (`X-Trino-Routing-Group`)
 - QueryId sticky-routing with 3-step cache-miss recovery chain
 - Cluster health monitoring and backend registry
 - Query history persistence (Postgres + MySQL)
@@ -186,6 +184,14 @@ Order enforced by dependency:
 ## Non-Prioritized Features
 
 Items in this section are not on the roadmap. They may be revisited based on operator demand, but no timeline is attached and no implementation work should begin without an explicit team-lead decision to promote them.
+
+### Header-Based Routing (`X-Trino-Routing-Group`)
+
+Support routing by inspecting the `X-Trino-Routing-Group` header on incoming requests — the gateway reads the header value and routes directly to that group, with no external service call. Trivial to implement (~10 LOC) but adds a second routing code path that operators must reason about alongside external routing.
+
+The external routing service can implement header-based routing trivially by reading `X-Trino-Routing-Group` from the request metadata the gateway forwards. Keeping it in the external service keeps the gateway's routing surface to a single code path.
+
+Operators who want header routing today: implement it as a one-liner in their external routing service.
 
 ### File-Based Routing Rules (MVEL replacement)
 
