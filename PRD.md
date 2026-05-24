@@ -72,11 +72,10 @@ External routing is the sole routing extensibility mechanism. Operators implemen
 - Cluster health monitoring and backend registry
 - Query history persistence (Postgres + MySQL)
 - Auth: OAuth2 (OIDC) + LDAP + noop
-- Gateway cookies (HMAC-SHA256, wire-compatible with Java for blue/green)
+- Gateway cookies (HMAC-SHA256, wire-compatible with Java `GatewayCookie`; `TG.OAUTH2` cookie for OAuth2 flow stickiness; `wireCompat: true` default for blue/green)
 - Admin REST API
 - Web UI (serve existing Java-compiled static bundle unchanged)
 - Config migration tool (`goway-migrate-config`) for one-shot conversion from Java YAML
-- `/v1/spooled/*` sticky routing via cookie — emit a `TG.*` cookie on POST `/v1/statement` responses covering `/v1/spooled` and `/v1/spooled/ack`; required for operators running Trino spooling with local coordinator storage across multiple clusters (segment GETs routed to wrong cluster → complete query failure without this)
 
 **Size estimate:** ~2,500–3,000 LOC (vs 13,600 in Java). QA: ~9–13 person-days.
 
@@ -154,6 +153,7 @@ Run the Go gateway in shadow-traffic mode alongside Java, logging its routing de
 4. **3-step cache-miss recovery chain.** History lookup → fan-out HEAD probe → first-active-default fallback. Simplifying causes cross-cluster query duplication.
 5. **Document `http-server.process-forwarded=true` prominently.** It is the reason `nextUri` works and the Java docs bury it.
 6. **`KILL QUERY` regex routing.** `KILL\s+QUERY\s+'(\d+_\d+_\d+_\w+)'` on POST bodies must route to the cluster running the query, not the rule-selected cluster.
+7. **Three separate `*http.Client` instances.** Proxy, monitor, and external-routing clients must never share a pool. `proxyClient` and `monitorClient` set `CheckRedirect: ErrUseLastResponse`; `routerClient` follows redirects. Pool isolation prevents backpressure on one path starving the others.
 
 ---
 
@@ -174,6 +174,19 @@ Support Oracle as a persistence backend. Blocked on the absence of a cgo-free Go
 ### Per-Routing-Group Database Isolation
 
 Each routing group gets its own database connection pool. No confirmed operator use was found during the study phase.
+
+### `/v1/spooled/*` Gateway-Level Sticky Routing
+
+Route spooled segment GET requests to the coordinator that owns the segment.
+
+**Why not in v1:** Three independent blockers found during Phase 3 study:
+1. The Trino JDBC driver uses a separate `OkHttpClient` without `CookieJar` for segment downloads — cookies set on `POST /v1/statement` responses are never sent on `GET /v1/spooled/*` requests.
+2. The segment identifier is AES-256 encrypted with Trino's internal spooling key — queryId is not recoverable from the URL, so the gateway cannot route by URL parsing.
+3. The Java gateway does not implement this feature either — `/v1/statement` routing uses the query-history database; there is no statement-routing or spooled-routing cookie.
+
+**Operator guidance:** Use `STORAGE` mode (presigned URIs) for multi-cluster deployments, or configure load-balancer session affinity at the infrastructure layer. `COORDINATOR_PROXY` mode with multiple clusters and no external session affinity will cause segment routing failures — this is a known Java gateway limitation too.
+
+**Promotion condition:** A mechanism is identified that does not require body rewriting (Hard Invariant #1) or Trino's internal spooling key.
 
 ---
 

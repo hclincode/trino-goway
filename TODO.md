@@ -18,17 +18,17 @@
 
 - [x] Task 9 — Discuss: Do we need a Go version of trino-gateway? (result: `topics/do-we-needs-golang-trino-gateway.md` — unanimous PROCEED WITH CAVEATS)
 
+## Phase 3: Architecture Design + Targeted Studies
+
+- [x] Task 10 — Architect writes `phase2-gate-responses.architect.md` (library decisions, DI stance, streaming/oracle/cookie rulings, 6th hard invariant, sequencing constraints; includes ruling on gRPC in v1 vs. Non-Groomed)
+- [x] Task 11 — Go-implementer writes `SCOPE.md` (locked scope, deferred scope, reversal cost per item; team-lead sign-off required to change any ruling)
+- [x] Task 12 — Go-implementer writes `gateway-cookies-and-sticky-routing.go-implementer.md` (cookie design: HMAC-SHA256 wire-compat with Java `GatewayCookie`, `wireCompat` config flag, `/v1/spooled/*` + `/v1/spooled/ack` sticky routing via `TG.*` cookie; required before proxy implementation starts)
+- [x] Task 13 — trino-expert studies `/v1/spooled/*` URL structure in Trino source (`studies/trino/spooled-segment-protocol.trino-expert.md`): token format, whether queryId is encoded, redirect chain, and whether cookie is the only viable sticky mechanism
+- [x] Task 14 — go-implementer studies `GatewayCookie.java` in depth (`studies/trino-gateway/gateway-cookie-internals.go-implementer.md`): HMAC-SHA256 payload format, `routingPaths` matching logic, cookie issue/validate/invalidate lifecycle; feeds into Task 12
+- [x] Task 15 — java-analyst produces complete external routing contract study (`studies/trino-gateway/external-routing-contract.java-analyst.md`): all request fields (`RoutingGroupExternalBody`) and response fields (`ExternalRouterResponse`), which `trinoQueryProperties` sub-fields are empty without `trino-parser`, `propagateErrors` fallback behavior, header-forwarding and `excludeHeaders` policy; pin the exact JSON shapes that Go HTTP + gRPC transports must replicate
+- [x] Task 16 — java-analyst or go-implementer catalogs admin REST API endpoints (`studies/trino-gateway/admin-api-surface.java-analyst.md`): all routes, request/response shapes, `@RolesAllowed` per endpoint; spec for Task 20 (`internal/admin`)
+
 ## Backlog
-
-### Phase 3: Architecture Design + Targeted Studies
-
-- [ ] Task 10 — Architect writes `phase2-gate-responses.architect.md` (library decisions, DI stance, streaming/oracle/cookie rulings, 6th hard invariant, sequencing constraints; includes ruling on gRPC in v1 vs. Non-Groomed)
-- [ ] Task 11 — Go-implementer writes `SCOPE.md` (locked scope, deferred scope, reversal cost per item; team-lead sign-off required to change any ruling)
-- [ ] Task 12 — Go-implementer writes `gateway-cookies-and-sticky-routing.go-implementer.md` (cookie design: HMAC-SHA256 wire-compat with Java `GatewayCookie`, `wireCompat` config flag, `/v1/spooled/*` + `/v1/spooled/ack` sticky routing via `TG.*` cookie; required before proxy implementation starts)
-- [ ] Task 13 — trino-expert studies `/v1/spooled/*` URL structure in Trino source (`studies/trino/spooled-segment-protocol.trino-expert.md`): token format, whether queryId is encoded, redirect chain, and whether cookie is the only viable sticky mechanism
-- [ ] Task 14 — go-implementer studies `GatewayCookie.java` in depth (`studies/trino-gateway/gateway-cookie-internals.go-implementer.md`): HMAC-SHA256 payload format, `routingPaths` matching logic, cookie issue/validate/invalidate lifecycle; feeds into Task 12
-- [ ] Task 15 — java-analyst produces complete external routing contract study (`studies/trino-gateway/external-routing-contract.java-analyst.md`): all request fields (`RoutingGroupExternalBody`) and response fields (`ExternalRouterResponse`), which `trinoQueryProperties` sub-fields are empty without `trino-parser`, `propagateErrors` fallback behavior, header-forwarding and `excludeHeaders` policy; pin the exact JSON shapes that Go HTTP + gRPC transports must replicate
-- [ ] Task 16 — java-analyst or go-implementer catalogs admin REST API endpoints (`studies/trino-gateway/admin-api-surface.java-analyst.md`): all routes, request/response shapes, `@RolesAllowed` per endpoint; spec for Task 20 (`internal/admin`)
 
 ### Phase 4: Implementation
 
