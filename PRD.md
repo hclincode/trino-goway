@@ -151,32 +151,7 @@ Run the Go gateway in shadow-traffic mode alongside Java, logging its routing de
 
 ## Roadmap
 
-### Phase 1 — Discovery (Complete)
-- All 7 team members studied `trino/` and `trino-gateway/` submodules
-- 30+ insight files written to `studies/`
-- Go/no-go discussion: `topics/do-we-needs-golang-trino-gateway.md`
-
-### Phase 2 — Architecture Design (Next)
-Earliest deliverables (required before implementation starts):
-1. `phase2-gate-responses.architect.md` — all library decisions, DI stance, streaming/oracle/cookie rulings, sequencing constraints
-2. `gateway-cookies-and-sticky-routing.go-implementer.md` — cookie design study (required before proxy implementation)
-3. `SCOPE.md` — locked scope, deferred scope, and reversal cost per item; team-lead sign-off required to change any ruling
-
-### Phase 3 — Implementation
-Order enforced by dependency:
-1. `internal/config` + `internal/lifecycle`
-2. `internal/persistence` (DAOs + migrations)
-3. `internal/routing` (external selector only)
-4. `internal/proxy` (after cookie study lands)
-5. `internal/monitor` (cluster health)
-6. `internal/auth`
-7. `cmd/trino-goway` (main + wiring)
-8. `cmd/goway-migrate-config` (config migration tool)
-
-### Phase 4 — QA Gates
-- Gate to START proxy-core: port allocator + testcontainers-go postgres + goleak + misbehaving-backend fixture
-- Gate to DECLARE proxy-core COMPLETE: differential harness (live Java↔Go side-by-side for Seams 1–8 + statement protocol)
-- G1 (`nextUri` host derivation against real Trino) must be the first QA gate — it's the only gap with a silent failure mode
+See `TODO.md` for the full phase breakdown and task list.
 
 ---
 
