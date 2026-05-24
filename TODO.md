@@ -24,7 +24,7 @@
 
 - [ ] Task 10 — Architect writes `phase2-gate-responses.architect.md` (library decisions, DI stance, streaming/oracle/cookie rulings, 6th hard invariant, sequencing constraints)
 - [ ] Task 11 — Go-implementer writes `SCOPE.md` (locked scope, deferred scope, reversal cost per item; team-lead sign-off required to change any ruling)
-- [ ] Task 12 — Go-implementer writes `gateway-cookies-and-sticky-routing.go-implementer.md` (cookie design + evaluate `/v1/spooled/*` sticky routing via cookie; required before proxy implementation starts)
+- [ ] Task 12 — Go-implementer writes `gateway-cookies-and-sticky-routing.go-implementer.md` (cookie design: HMAC-SHA256 wire-compat with Java `GatewayCookie`, `wireCompat` config flag, `/v1/spooled/*` + `/v1/spooled/ack` sticky routing via `TG.*` cookie; required before proxy implementation starts)
 
 ### Phase 4: Implementation
 
@@ -33,7 +33,7 @@ Order enforced by dependency:
 - [ ] Task 13 — `internal/config` + `internal/lifecycle` (YAML loader, custom unmarshalers for DataSize/Duration, explicit Start/Stop lifecycle)
 - [ ] Task 14 — `internal/persistence` (DAOs + goose migrations; Postgres + MySQL; query history + cluster registry tables)
 - [ ] Task 15 — `internal/routing` (external routing selector: HTTP API + gRPC; queryId sticky-routing with 3-step cache-miss recovery chain)
-- [ ] Task 16 — `internal/proxy` (reverse proxy core: Trino statement protocol, `nextUri` polling, gateway cookies, header forwarding; after Task 12 lands)
+- [ ] Task 16 — `internal/proxy` (reverse proxy core: Trino statement protocol, `nextUri` polling, gateway cookies, `/v1/spooled/*` sticky routing via `TG.*` cookie, header forwarding; after Task 12 lands)
 - [ ] Task 17 — `internal/monitor` (cluster health monitoring + backend registry; three separate `*http.Client` instances for proxy/monitor/external-routing)
 - [ ] Task 18 — `internal/auth` (OAuth2/OIDC + LDAP + noop; JWKS TTL caching)
 - [ ] Task 19 — `internal/admin` (admin REST API)
