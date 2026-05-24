@@ -45,7 +45,6 @@ External routing is the sole extensibility mechanism. Operators implement routin
 - Admin REST API
 - Web UI (serve existing Java-compiled static bundle unchanged)
 - Config migration tool (`goway-migrate-config`) for one-shot conversion from Java YAML
-- `SCOPE.md` — written artifact listing locked and deferred scope; reversals require team-lead sign-off
 
 **Size estimate:** ~2,500–3,000 LOC (vs 13,600 in Java). QA: ~9–13 person-days.
 
@@ -77,15 +76,7 @@ The third case is a hard failure, not degraded performance. Operators using loca
 
 ## Tend Not to Support
 
-### Side-by-Side Preview Mode
-
-Run the Go gateway in shadow-traffic mode alongside Java, logging its routing decision for each request without serving real traffic — intended to validate Go/Java routing parity before cutover.
-
-**Why this no longer applies:** when all routing logic lives in an external service (the only routing mode trino-goway supports), Go and Java both call the same service and get the same routing group by definition. There is no Go-vs-Java routing algorithm to compare. The premise of preview mode disappears. Cutover confidence comes from the Phase 4 differential harness (proxy behavior, not routing decisions) and a gradual traffic ramp.
-
 ### File-Based Routing Rules (MVEL)
-
-**Decision: Permanently out of scope. Will not be implemented.**
 
 The Java gateway supports a file-based routing rule engine where operators write YAML files containing MVEL expressions:
 
@@ -101,52 +92,18 @@ MVEL is evaluated at runtime against the incoming HTTP request, letting operator
 **Why we are not supporting this:**
 
 1. **No Go equivalent of MVEL.** MVEL is a JVM-only expression language. The two closest Go alternatives — `expr-lang/expr` and `google/cel-go` — both require rewriting every operator rule file in a new syntax, breaking compatibility regardless.
-
 2. **File-based routing is not the recommended pattern going forward.** External routing (HTTP/gRPC) is strictly more powerful: the operator's routing service can call databases, use ML models, read from Kafka, or apply arbitrarily complex logic — none of which is possible inside a MVEL expression file.
+3. **The replacement path exists today.** Operators using MVEL rules can move their logic into an external routing service in any language they prefer. The migration effort is one small HTTP service, not a rule-by-rule rewrite.
+4. **It eliminates the only other JVM-bound dependency (`trino-parser`).** The sole non-MVEL use of `trino-parser` is a `KILL QUERY` body parse, replaceable with a 10-line regex. Dropping file-based routing eliminates `trino-parser` entirely.
+5. **Scope discipline.** Minimal v1 (no MVEL/trino-parser) ≈ 2,500 LOC. Full v1 with file-based rules ≈ 6,000–8,000 LOC — a 3× increase with no user-visible improvement for operators who can use external routing instead.
 
-3. **The replacement path exists today.** Operators using MVEL rules can move their logic into an external routing service in any language they prefer. The gateway calls it once per uncached request. The migration effort is one small HTTP service, not a rule-by-rule rewrite.
+**Migration path:** run your routing logic as a small HTTP service. Point the gateway at it with `routing.rulesType=EXTERNAL`. The gateway POSTs request metadata (headers, user, client tags, query properties) as JSON; your service returns `{"routingGroup": "etl"}`. Any MVEL rule can be replicated in ~10 lines of Python, Go, or Node.
 
-4. **It eliminates the only other JVM-bound dependency (`trino-parser`).** The sole non-MVEL use of `trino-parser` in the gateway is a `KILL QUERY` body parse, replaceable with a 10-line regex. Dropping file-based routing eliminates `trino-parser` entirely — no Go Trino SQL parser is needed.
+### Side-by-Side Preview Mode
 
-5. **Scope discipline.** The team studied this carefully. Minimal v1 (no MVEL/trino-parser) ≈ 2,500 LOC. Full v1 with file-based rules ≈ 6,000–8,000 LOC — a 3× increase with no user-visible improvement for operators who can use external routing instead.
+Run the Go gateway in shadow-traffic mode alongside Java, logging its routing decision for each request without serving real traffic — intended to validate Go/Java routing parity before cutover.
 
-**What operators lose:**
-
-- Hot-reload YAML rule files without gateway restart
-- Stateful multi-rule composition (`state.put`/`state.get` per request)
-- Priority-ordered rule override
-- Client-tag matching in rule expressions
-- SQL-content-based routing (catalog/schema/table in conditions)
-
-**Migration path for existing MVEL users:**
-
-Run your routing logic as a small HTTP service. Point the gateway at it with `routing.rulesType=EXTERNAL`. The gateway POSTs request metadata (headers, user, client tags, query properties) to your service as JSON; your service returns `{"routingGroup": "etl"}`. You can replicate any MVEL rule in ~10 lines of Python, Go, or Node.
-
----
-
-### SQL Content Routing (`trino-parser`)
-
-**Decision: Out of scope for v1. Revisit in v2 only if operator demand justifies it.**
-
-The Java gateway can route queries based on parsed SQL — e.g. "if this query references catalog `hive`, send to cluster A." This requires `trino-parser`, the full Trino ANTLR grammar compiled for Java.
-
-There is no Go Trino SQL parser. Generating one from the ANTLR grammar creates a permanent version-tracking burden (grammar changes with every Trino release). The operator impact is low because SQL-content routing can be replicated by the external routing service if the operator forwards the query body.
-
----
-
-### Oracle Database Backend
-
-**Decision: Deferred to v2.**
-
-No cgo-free Oracle driver exists for Go. The Java gateway supports Oracle via JDBC. v1 supports Postgres and MySQL only.
-
----
-
-### Per-Routing-Group Database Isolation
-
-**Decision: Dropped.**
-
-`JdbcConnectionManager.getJdbi(routingGroupDatabase)` in the Java gateway allows each routing group to have its own database. No confirmed operator use was found. Dropped from scope permanently.
+**Why this no longer applies:** when all routing logic lives in an external service (the only routing mode trino-goway supports), Go and Java both call the same service and get the same routing group by definition. There is no Go-vs-Java routing algorithm to compare. Cutover confidence comes from the Phase 4 differential harness (proxy behavior, not routing decisions) and a gradual traffic ramp.
 
 ---
 
@@ -189,15 +146,14 @@ No cgo-free Oracle driver exists for Go. The Java gateway supports Oracle via JD
 
 ### Phase 2 — Architecture Design (Next)
 Earliest deliverables (required before implementation starts):
-1. `phase2-gate-responses.architect.md` — all library decisions, DI stance, streaming/oracle/cookie rulings, Phase 2 sequencing constraints
-2. `SCOPE.md` — locked scope, deferred scope, reversal cost per item
-3. `gateway-cookies-and-sticky-routing.go-implementer.md` — cookie design study (required before proxy implementation)
+1. `phase2-gate-responses.architect.md` — all library decisions, DI stance, streaming/oracle/cookie rulings, sequencing constraints
+2. `gateway-cookies-and-sticky-routing.go-implementer.md` — cookie design study (required before proxy implementation)
 
 ### Phase 3 — Implementation
 Order enforced by dependency:
 1. `internal/config` + `internal/lifecycle`
 2. `internal/persistence` (DAOs + migrations)
-3. `internal/routing` (header selector + external selector)
+3. `internal/routing` (external selector only)
 4. `internal/proxy` (after cookie study lands)
 5. `internal/monitor` (cluster health)
 6. `internal/auth`
@@ -213,42 +169,31 @@ Order enforced by dependency:
 
 ## Non-Groomed Features
 
-Items in this section are not on the roadmap. They may be revisited based on operator demand, but no timeline is attached and no implementation work should begin without an explicit team-lead decision to promote them.
+Items in this section have no timeline and no implementation commitment. They may be promoted based on operator demand, but require an explicit team-lead decision to move forward.
 
 ### Header-Based Routing (`X-Trino-Routing-Group`)
 
-Support routing by inspecting the `X-Trino-Routing-Group` header on incoming requests — the gateway reads the header value and routes directly to that group, with no external service call. Trivial to implement (~10 LOC) but adds a second routing code path that operators must reason about alongside external routing.
-
-The external routing service can implement header-based routing trivially by reading `X-Trino-Routing-Group` from the request metadata the gateway forwards. Keeping it in the external service keeps the gateway's routing surface to a single code path.
-
-Operators who want header routing today: implement it as a one-liner in their external routing service.
+Route requests by reading the `X-Trino-Routing-Group` header directly, with no external service call. Trivial to implement (~10 LOC) but adds a second routing code path alongside external routing. The external routing service can implement this as a one-liner by reading the header from the forwarded request metadata.
 
 ### File-Based Routing Rules (MVEL replacement)
 
-Restore the `rulesType=FILE` routing mode using a Go-native expression language (CEL or `expr-lang/expr`) instead of MVEL. Would require:
-- Choosing an expression engine and porting all seven `routing_rules_*.yml` fixture files to the new syntax (breaking config change for operators)
-- Implementing per-request mutable `state` map, priority ordering, `if/else` action bodies
-- Hot-reload file watcher with deterministic reload-complete signal
-- Expression engine sandboxing (must block subprocess exec, filesystem access, network sockets — Java's MVEL config explicitly blocks `Process` and `Runtime`)
-
-CEL is the team's named recommendation if this is ever revisited (typed, sandboxed by construction, used in Kubernetes/Envoy/Istio). `expr-lang/expr` is the alternative (simpler API, lower operator friction, requires explicit sandboxing).
-
-Operators who need rule-based routing today should use the external routing selector.
+Restore `rulesType=FILE` using a Go-native expression language (CEL or `expr-lang/expr`) instead of MVEL. Would require choosing an expression engine, porting all seven `routing_rules_*.yml` fixtures to new syntax (breaking config change), implementing per-request mutable state, priority ordering, hot-reload, and expression engine sandboxing. CEL is the team's named recommendation (typed, sandboxed by construction). Operators who need rule-based routing today should use the external routing selector.
 
 ### SQL Content Routing
 
-Route queries based on parsed SQL — e.g. "if this query references catalog `hive`, send to cluster A." Requires a Go Trino SQL parser covering the statement forms in `TestRoutingGroupSelector.provideTableExtractionQueries` (~30 DDL/DML forms). No Go Trino parser exists as of 2026-05. Building one from the ANTLR grammar creates a permanent version-tracking burden as the Trino grammar evolves.
-
-Operators who need SQL-content routing today can forward the query body to their external routing service and parse it there.
+Route queries based on parsed SQL — e.g. "if this query references catalog `hive`, send to cluster A." No Go Trino SQL parser exists as of 2026-05. Building one from the ANTLR grammar creates a permanent version-tracking burden as Trino's grammar evolves. Operators can forward the query body to their external routing service and parse it there.
 
 ### Oracle Database Backend
 
-Support Oracle as a persistence backend for query history and cluster registry. Blocked on the absence of a cgo-free Go Oracle driver. v1 supports Postgres and MySQL only.
+Support Oracle as a persistence backend. Blocked on the absence of a cgo-free Go Oracle driver. v1 supports Postgres and MySQL only.
 
 ### Per-Routing-Group Database Isolation
 
-Each routing group gets its own JDBC connection pool pointing at a separate database (`JdbcConnectionManager.getJdbi(routingGroupDatabase)` in the Java gateway). No confirmed operator use was found during the study phase. Dropped from scope.
+Each routing group gets its own database connection pool. No confirmed operator use was found during the study phase.
 
+### `SCOPE.md` Artifact
+
+A written document listing locked scope, deferred scope, and the reversal cost per item. Useful for preventing scope creep during implementation. Low effort; promote to Phase 2 deliverable if the team decides to formalize scope governance.
 
 ---
 
