@@ -78,6 +78,22 @@ Detail follows.
 - **Current Java coverage:** none. `TestQueryCountBasedRouter` (303 lines) is entirely single-threaded.
 - **What's needed:** Go test that calls `provideBackendConfiguration` from N goroutines simultaneously and asserts (a) no panic, (b) the resulting cluster-stats snapshot is internally consistent (sum of increments equals N), (c) the distribution is "balanced" within tolerance (no single cluster gets >K% of requests when all are equal-load). This is a new Go-side test; nothing to port.
 
+### G4a — Stochastic-router distribution
+
+- **Why it matters:** the stochastic / random backend selector is supposed to produce a roughly uniform distribution across HEALTHY backends (weighted, where weights apply). A regression — biased PRNG seeding, off-by-one in the weight bucket, or a Go port that uses `math/rand` package-global state and shares it unsafely across goroutines — would silently skew traffic to a subset of backends. This is operationally indistinguishable from a healthy gateway until somebody reads cluster-side metrics and notices the imbalance.
+- **Observable signals:**
+  - Distribution of selected backends across N draws is within tolerance of expected (for K equal-weight HEALTHY backends, each should receive `N/K ± tolerance` selections).
+  - No backend receives 0 selections when its weight > 0 (degenerate empty-bucket bug).
+  - No panic / data race when `selectBackend` is called from many goroutines (concurrency adjacency to G4).
+  - Determinism with an injected seed: same seed + same backend set → same selection sequence (testability requirement, not a production guarantee).
+- **Current Java coverage:** degenerate. The existing test in `routing-engine.java-qa.md`'s cross-referenced location uses a **single-choice case** (effectively one HEALTHY backend), which sidesteps the actual distribution behaviour entirely. The single-choice test passes whether the router is uniform, biased, or constant — it only asserts that the selector returns *something*. This is a discrete coverage gap, not a flake risk.
+- **What's needed:**
+  - Inject a `*rand.Rand` (not the package-global) so the test is deterministic and the production code does not share global PRNG state across goroutines.
+  - Seed the injected `*rand.Rand`, run N draws (N ≥ 1000) against five equal-weight HEALTHY backends, assert the resulting distribution is within tolerance (e.g. each backend gets between `0.8 * N/K` and `1.2 * N/K`).
+  - Weighted-distribution variant: backends with weights `[1, 2, 3, 4]` should receive selections in roughly `1:2:3:4` ratio within tolerance.
+  - Concurrency variant: same test with N goroutines each making M draws; aggregate distribution still within tolerance; no race-detector hits.
+- **Cross-references:** related to G4 (both are routing-engine concurrency concerns) and `[[routing-engine.java-qa.md]]` + `[[test-infrastructure.java-qa.md]]` (where the degenerate single-choice case was originally flagged during the test-infrastructure sign-off pass).
+
 ### G5 — Async timeout (Seam 6)
 
 - **Why it matters:** `ProxyRequestHandler` returns `502 BAD_GATEWAY` with body `"Request to remote Trino server timed out after<duration>"` when the configured `asyncTimeout` fires. Operators rely on this for SLA signalling; a regression that returns 504 instead, or silently hangs, is operationally damaging.
@@ -187,7 +203,7 @@ Detail follows.
 
 - **Wire-correctness gaps:** G1, G2, G14, G15, G17, G19 — these regress *silently*; a Go rewrite would pass all integration tests against mock backends and still break real clients.
 - **Failure-mode gaps:** G3, G5, G6, G9, G10, G13 — happy paths work; specific failure modes are untested.
-- **Concurrency gaps:** G4, G7, G11 — single-threaded tests hide threading bugs.
+- **Concurrency gaps:** G4, G4a, G7, G11 — single-threaded tests hide threading bugs. G4a additionally has a distribution-coverage gap (current test is single-choice degenerate, not actual stochastic behaviour).
 - **Lifecycle gaps:** G12 — shutdown/startup state machines untested.
 - **Operator-contract gaps:** G20 — observability surface shape untested.
 - **New-feature-shaped gaps:** G18, G8 — depends on architect/expert decisions about scope.
