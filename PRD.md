@@ -205,7 +205,7 @@ Order enforced by dependency:
 
 ---
 
-## Non-Prioritized Features
+## Non-Groomed Features
 
 Items in this section are not on the roadmap. They may be revisited based on operator demand, but no timeline is attached and no implementation work should begin without an explicit team-lead decision to promote them.
 
