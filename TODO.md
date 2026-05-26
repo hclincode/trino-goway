@@ -37,7 +37,7 @@ Order enforced by dependency:
 - [ ] Task 17 — `internal/config` + `internal/lifecycle` (YAML loader, custom unmarshalers for DataSize/Duration, explicit Start/Stop lifecycle)
 - [ ] Task 18 — `internal/persistence` (DAOs + goose migrations; Postgres + MySQL; query history + cluster registry tables)
 - [ ] Task 19 — `internal/routing` (external routing selector: HTTP + gRPC transports with identical field contract matching original `RoutingGroupExternalBody`/`ExternalRouterResponse`; queryId sticky-routing with 3-step cache-miss recovery chain; `propagateErrors` fallback; after Task 15 lands)
-- [ ] Task 20 — `internal/proxy` (reverse proxy core: Trino statement protocol, `nextUri` polling, gateway cookies, `/v1/spooled/*` sticky routing via `TG.*` cookie, header forwarding; after Tasks 12–14 land)
+- [ ] Task 20 — `internal/proxy` (reverse proxy core: Trino statement protocol, `nextUri` polling, `TG.OAUTH2` cookie for OAuth2 flow stickiness, header forwarding; `/v1/spooled/*` streams via `io.Copy` with no sticky routing — Option A, matches Java behavior; after Tasks 12–14 land)
 - [ ] Task 21 — `internal/monitor` (cluster health monitoring + backend registry; three separate `*http.Client` instances for proxy/monitor/external-routing)
 - [ ] Task 22 — `internal/auth` (OAuth2/OIDC + LDAP + noop; JWKS TTL caching)
 - [ ] Task 23 — `internal/admin` (admin REST API; after Task 16 lands)
