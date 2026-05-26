@@ -262,13 +262,13 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 
 ---
 
-## 14. Assertions — `[OPEN: D1]`
+## 14. Assertions
 
-**Team decision required — see Open Decisions section.**
+Use `github.com/stretchr/testify` — `require` and `assert` packages only. No `mock`, no `suite`.
 
-**If stdlib only (Option A):** use `t.Errorf` (non-fatal) and `t.Fatalf` (fatal).
-
-**If testify (Option B — architect recommendation):** `require` (fatal) for preconditions; `assert` (non-fatal) for outcome assertions. Never mix them backwards. Only `require` and `assert` packages — no `mock`, no `suite`.
+- `require` (fatal): preconditions — setup steps that make the test meaningless if they fail
+- `assert` (non-fatal): outcome checks — properties the test actually asserts
+- Never mix them backwards
 
 ---
 
@@ -365,60 +365,16 @@ Run: `go test -run=TestFoo -update`. Commit the updated file as a deliberate, re
 
 ---
 
-## Open Decisions
+## Locked Decisions (resolved)
 
-These 6 items need team-lead sign-off before the document is locked.
-
-### D1: Assertion library — stdlib vs testify
-
-| Option | Description |
-|---|---|
-| **A — stdlib only** | `t.Errorf` / `t.Fatalf`; zero dependencies; Go team recommendation |
-| **B — testify (recommended)** | `require` + `assert` packages only; `require.NoError` prevents test-continues-past-fatal bugs; `assert.Equal` gives readable struct diffs |
-
-Architect recommendation: **Option B.** The QA rubric demands byte-level HMAC cookie assertions and sticky-routing chain verification where `require.NoError` prevents misleading downstream failures. Constraint: only `require` and `assert` — no `mock`, no `suite`.
-
-### D2: Error wrapping style
-
-Architect recommendation (two rules):
-1. Package-level sentinels: `var ErrX = errors.New("x")` — so `errors.Is` works
-2. Call-site wrapping: `fmt.Errorf("pkg: op: %w", err)` — always add context, always `%w`
-
-No bare `return err` without context except in thin forwarders where caller context is already sufficient.
-
-### D3: Linter set
-
-Architect recommendation — `golangci-lint` with this exact set:
-```yaml
-linters:
-  enable:
-    - govet
-    - errcheck
-    - staticcheck
-    - ineffassign
-    - unused
-    - goimports
-    - revive
-    - gosec
-    - bodyclose   # non-negotiable: unclosed response bodies are the exact leak class Go rewrite fixes
-```
-
-### D4: Config struct shape
-
-Architect recommendation: **nested** (`cfg.Monitor.Interval`, `cfg.DB.Driver`). Maps directly to YAML structure; passes only the relevant sub-config to each constructor; avoids 8+ parameter constructors or full-config coupling.
-
-### D5: Admin API error response format
-
-| Option | Shape |
-|---|---|
-| **A — simple (recommended)** | `{"error": "backend not found"}` |
-| **B — Java envelope** | `{"code": 404, "msg": "backend not found", "data": null}` |
-
-Architect recommendation: **Option A.** The Java gateway itself only uses the `Result<T>` envelope on `/webapp/*`, not on `/gateway/*` or `/entity/*`. No consistent Java contract to mirror — Go standardizes on the simple form.
-
-### D6: Shared test utilities location
-
-Architect recommendation: **`internal/testutil/`** for shared infrastructure (fake Trino backend, port allocator, testcontainers DB setup). Single-interface fakes used by only one package stay local in `_test.go` files. The `internal/` path keeps it module-private.
+| # | Topic | Decision |
+|---|---|---|
+| D1 | Assertion library | **testify** — `require` + `assert` only (§14) |
+| D2 | Error wrapping | `errors.New` for sentinels; `fmt.Errorf("pkg: op: %w", err)` for wrapping (§3) |
+| D3 | Linter set | `golangci-lint` with 9 linters incl. `bodyclose` (§11) |
+| D4 | Config struct | **Nested** — `cfg.Monitor.Interval`, `cfg.DB.Driver` (§6) |
+| D5 | Admin error format | **Simple** — `{"error": "..."}` (§10) |
+| D6 | Test utilities | **`internal/testutil/`** for shared infra; local `_test.go` for single-package fakes (§12) |
 
 ---
 
