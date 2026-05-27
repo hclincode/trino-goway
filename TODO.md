@@ -32,22 +32,22 @@
 
 Critical path: **17 → 18 → 19 → 20 → 24**. Tasks 21, 22, 23, 25 off critical path (start after 17).
 
-### Task 17 — `internal/config` + `internal/lifecycle`
+### Task 17 — `internal/config` + `internal/lifecycle` ✅
 
-- [ ] `go.mod` — `go mod init github.com/hclincode/trino-goway`, pin all dependencies
-- [ ] `internal/config/doc.go` — package doc comment
-- [ ] `internal/config/config.go` — top-level `Config` struct (nested: `Proxy`, `Admin`, `Monitor`, `DB`, `Routing`, `Auth`, `Cookie`)
-- [ ] `internal/config/config.go` — `Load(path string) (*Config, error)` YAML loader via `gopkg.in/yaml.v3`
-- [ ] `internal/config/config.go` — `Duration` custom unmarshaler (accepts `"10s"`, `"1m"`, `"1h30m"`)
-- [ ] `internal/config/config.go` — `DataSize` custom unmarshaler (accepts `"1MiB"`, `"512KB"`)
-- [ ] `internal/config/config.go` — `Validate()` — `admin.port ≠ proxy.port`, `responseSize > 0`, required fields
-- [ ] `internal/lifecycle/doc.go` — package doc comment
-- [ ] `internal/lifecycle/server.go` — `Server` struct wrapping proxy + admin `*http.Server`
-- [ ] `internal/lifecycle/server.go` — `Start(ctx)`: `ListenAndServe` both servers concurrently, surface startup errors
-- [ ] `internal/lifecycle/server.go` — `Stop(ctx)`: `Shutdown` both servers respecting context deadline
-- [ ] `internal/config/config_test.go` — table-driven: YAML loading, Duration/DataSize parsing, validation errors
-- [ ] `internal/lifecycle/server_test.go` — Start/Stop lifecycle, goroutine clean (goleak)
-- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+- [x] `go.mod` — `go mod init github.com/hclincode/trino-goway`, pin all dependencies
+- [x] `internal/config/doc.go` — package doc comment
+- [x] `internal/config/config.go` — top-level `Config` struct (nested: `Proxy`, `Admin`, `Monitor`, `DB`, `Routing`, `Auth`, `Cookie`)
+- [x] `internal/config/config.go` — `Load(path string) (*Config, error)` YAML loader via `gopkg.in/yaml.v3`
+- [x] `internal/config/config.go` — `Duration` custom unmarshaler (accepts `"10s"`, `"1m"`, `"1h30m"`)
+- [x] `internal/config/config.go` — `DataSize` custom unmarshaler (accepts `"1MiB"`, `"512KB"`)
+- [x] `internal/config/config.go` — `Validate()` — `admin.port ≠ proxy.port`, `responseSize > 0`, required fields
+- [x] `internal/lifecycle/doc.go` — package doc comment
+- [x] `internal/lifecycle/server.go` — `Server` struct wrapping proxy + admin `*http.Server`
+- [x] `internal/lifecycle/server.go` — `Start(ctx)`: `ListenAndServe` both servers concurrently, surface startup errors
+- [x] `internal/lifecycle/server.go` — `Stop(ctx)`: `Shutdown` both servers respecting context deadline
+- [x] `internal/config/config_test.go` — table-driven: YAML loading, Duration/DataSize parsing, validation errors
+- [x] `internal/lifecycle/server_test.go` — Start/Stop lifecycle, goroutine clean (goleak)
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
 
 ### Task 18 — `internal/persistence`
 
@@ -138,12 +138,12 @@ Critical path: **17 → 18 → 19 → 20 → 24**. Tasks 21, 22, 23, 25 off crit
 
 ### Phase 5: QA Gates
 
-- [ ] Task 26 — Build QA infra
-  - [ ] `internal/testutil/portalloc.go` — random available port allocator
-  - [ ] `internal/testutil/postgres.go` — testcontainers-go Postgres setup helper
-  - [ ] `internal/testutil/mysql.go` — testcontainers-go MySQL setup helper
-  - [ ] `internal/testutil/backend.go` — misbehaving fake Trino backend (`httptest.Server`: configurable latency, error injection, 3xx responses)
-  - [ ] `internal/testutil/goleak.go` — `VerifyTestMain` wrapper used by all `TestMain` functions
-  - [ ] `go vet ./...` + `golangci-lint run ./...` pass
+- [x] Task 26 — Build QA infra ✅
+  - [x] `internal/testutil/portalloc.go` — random available port allocator
+  - [x] `internal/testutil/postgres.go` — testcontainers-go Postgres setup helper
+  - [x] `internal/testutil/mysql.go` — testcontainers-go MySQL setup helper
+  - [x] `internal/testutil/backend.go` — misbehaving fake Trino backend (`httptest.Server`: configurable latency, error injection, 3xx responses)
+  - [x] `internal/testutil/goleak.go` — `VerifyTestMain` wrapper used by all `TestMain` functions
+  - [x] `go vet ./...` + `golangci-lint run ./...` pass
 - [ ] Task 27 — G1 test: `nextUri` host derivation against real Trino container (`//go:build e2e`; first QA gate — only silent failure mode)
 - [ ] Task 28 — Differential harness: `cmd/goway-diff-harness/` — live Java↔Go side-by-side for proxy Seams 1–8 + statement protocol (gate to DECLARE proxy-core COMPLETE)
