@@ -1,0 +1,161 @@
+# trino-goway example configuration
+#
+# Copy this file to config.yaml and adjust values for your environment.
+# All fields shown here reflect their default values unless noted otherwise.
+# Duration strings accept Go format: "30s", "1m", "1h30m".
+# Size strings accept: B, KB, KiB, MB, MiB, GB, GiB.
+
+# ---------------------------------------------------------------------------
+# proxy — the main Trino-protocol listener
+# ---------------------------------------------------------------------------
+proxy:
+  # Port that Trino clients connect to. Forward this port from your load balancer.
+  port: 8080
+
+  # Maximum response body buffered for POST /v1/statement replies.
+  # Increase if your queries return very large initial result sets.
+  responseSize: 1MiB
+
+  # Hard deadline for a single proxied request (connect + headers + body).
+  # Must exceed the longest expected Trino query submission round-trip.
+  requestTimeout: 30s
+
+# ---------------------------------------------------------------------------
+# admin — internal management API (health, backends, metrics)
+# ---------------------------------------------------------------------------
+admin:
+  # Port for /healthz, /readyz, /metrics, and the backend-management REST API.
+  # Must differ from proxy.port. Do NOT expose this port to the public internet.
+  port: 8090
+
+# ---------------------------------------------------------------------------
+# monitor — background backend health prober
+# ---------------------------------------------------------------------------
+monitor:
+  # How often each backend is probed via GET /v1/info.
+  interval: 30s
+
+  # Per-probe HTTP timeout. Should be well below interval.
+  checkTimeout: 5s
+
+# ---------------------------------------------------------------------------
+# db — persistent store for query history and backend registry
+# ---------------------------------------------------------------------------
+db:
+  # Supported drivers: "postgres", "mysql".
+  # Leave blank to run without persistence (backends must be supplied via the
+  # admin API on every restart, and query-history routing will not work).
+  driver: postgres
+
+  # Data-source name in the driver's standard format.
+  # Postgres example: "host=localhost port=5432 dbname=trino_gateway user=gw password=secret sslmode=disable"
+  # MySQL   example: "gw:secret@tcp(localhost:3306)/trino_gateway?parseTime=true"
+  dsn: "host=localhost port=5432 dbname=trino_gateway user=gw password=secret sslmode=disable"
+
+# ---------------------------------------------------------------------------
+# routing — how inbound requests are assigned to a backend cluster
+# ---------------------------------------------------------------------------
+routing:
+  # Routing group used when no group can be determined from the request.
+  defaultGroup: default
+
+  # Routing engine. "EXTERNAL" is the only supported type.
+  # The external service receives a subset of request headers and returns a
+  # routing-group name (HTTP) or a RouteResponse (gRPC).
+  type: EXTERNAL
+
+  external:
+    # HTTP endpoint of the routing service (mutually exclusive with grpcAddr).
+    # The gateway POSTs a JSON body with the request headers and expects a
+    # plain-text routing-group name in the response body.
+    url: "http://localhost:9000/route"
+
+    # gRPC address of the routing service (mutually exclusive with url).
+    # Format: "host:port"  — TLS is not yet supported.
+    # grpcAddr: "localhost:9001"
+
+    # Timeout for a single routing call.
+    timeout: 1s
+
+    # Headers stripped before forwarding to the routing service AND from
+    # the X-Trino-Gateway-External-Headers response. Use this to prevent
+    # sensitive credentials from leaking to the router.
+    excludeHeaders:
+      - Authorization
+      - X-Trino-Client-Secret
+
+# ---------------------------------------------------------------------------
+# auth — authentication for the admin API and (optionally) proxy requests
+# ---------------------------------------------------------------------------
+auth:
+  # Authentication backend. Options:
+  #   "NOOP" — no authentication; every caller is granted USER role (dev/test only)
+  #   "OIDC" — validate Bearer tokens against a JSON Web Key Set
+  #   "LDAP" — bind-and-search against an LDAP/AD directory
+  type: NOOP
+
+  # --- OIDC (only read when type: OIDC) ---
+  oidc:
+    # Base URL of the OIDC provider (used for discovery if jwksUrl is omitted).
+    issuerUrl: "https://accounts.example.com"
+
+    # OAuth2 client credentials (used for token introspection if needed).
+    clientId: "trino-gateway"
+    clientSecret: "change-me"
+
+    # Explicit JWKS endpoint. Required when type is OIDC.
+    jwksUrl: "https://accounts.example.com/.well-known/jwks.json"
+
+    # How long to cache the JWKS before re-fetching. Seconds.
+    jwksTtlSecs: 300
+
+    # OAuth2 scopes requested during the authorization code flow.
+    scopes:
+      - openid
+      - profile
+      - email
+
+  # --- LDAP (only read when type: LDAP) ---
+  ldap:
+    # LDAP server URL. Use ldaps:// for TLS.
+    url: "ldap://ldap.example.com:389"
+
+    # Service-account DN used for the initial bind.
+    bindDn: "cn=svc-gw,ou=serviceaccounts,dc=example,dc=com"
+    bindPassword: "change-me"
+
+    # Base DN under which user entries are searched.
+    userBase: "ou=users,dc=example,dc=com"
+
+    # LDAP attribute that holds the username (matched against X-Trino-User).
+    userAttr: uid
+
+  # --- Role assignment (applies to OIDC and LDAP) ---
+  # Each value is a Java-compatible regex matched against the principal's
+  # memberOf string (comma-joined list of group DNs / claim values).
+  authorization:
+    # Groups matching this regex receive the ADMIN role (full admin API access).
+    admin: "cn=trino-admins,.*"
+
+    # Groups matching this regex receive the USER role (proxy + read-only admin).
+    user: "cn=trino-users,.*"
+
+    # Groups matching this regex receive the API role (programmatic access only).
+    api: "cn=trino-api,.*"
+
+# ---------------------------------------------------------------------------
+# cookie — session cookie used to pin multi-statement queries to a backend
+# ---------------------------------------------------------------------------
+cookie:
+  # HMAC-SHA256 signing secret for the gateway session cookie.
+  # Must be the same across all gateway instances in a cluster.
+  # Generate with: openssl rand -hex 32
+  secret: "change-me-use-openssl-rand-hex-32"
+
+  # How long a session cookie remains valid. Should exceed the longest
+  # expected Trino query execution time.
+  ttl: 10m
+
+  # Keep wire format compatible with the Java trino-gateway cookie encoding.
+  # Set to false only if all clients are exclusively talking to this Go gateway.
+  wireCompat: true
