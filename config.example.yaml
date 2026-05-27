@@ -68,7 +68,13 @@ routing:
     # HTTP endpoint of the routing service (mutually exclusive with grpcAddr).
     # The gateway POSTs a JSON body with the request headers and expects a
     # plain-text routing-group name in the response body.
-    url: "http://localhost:9000/route"
+    #
+    # Both url and grpcAddr are OPTIONAL. If neither is set the gateway skips
+    # the external call entirely and routes every request to defaultGroup,
+    # picking any active backend in that group. This is sufficient for
+    # single-cluster or dev/test deployments.
+    #
+    # url: "http://localhost:9000/route"
 
     # gRPC address of the routing service (mutually exclusive with url).
     # Format: "host:port"  — TLS is not yet supported.
