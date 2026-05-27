@@ -32,7 +32,9 @@
       "Bash(uniq *)",
       "Bash(diff *)",
       "Bash(curl *)",
-      "Bash(jq *)"
+      "Bash(jq *)",
+      "Bash(source * && gvm * && go *)",
+      "Bash(/Users/hclin/.gvm/gos/go1.26.3/bin/go *)"
     ]
   }
 }
