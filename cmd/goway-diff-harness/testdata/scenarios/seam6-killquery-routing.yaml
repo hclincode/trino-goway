@@ -1,0 +1,50 @@
+# Seam 6 — KILL QUERY regex routing (Hard Invariant #6).
+#
+# Java reference: RoutingManager extracts the queryId from a POST body
+#                 matching KILL\s+QUERY\s+'(...)' and routes to the history
+#                 backend so the cancel lands on the same coordinator that
+#                 originally submitted the query.
+# Go reference:   internal/routing/router.go::killQueryRE +
+#                 internal/proxy/proxy_test.go::
+#                 TestProxy_Seam6_KillQueryRegexRouting covers the unit.
+#
+# Live-mode observability: with a single shared Trino backend the routing
+# DESTINATION is the same coordinator either way, so the differential
+# assertion reduces to "both gateways accept KILL QUERY syntax and forward
+# it without 4xx-ing on the body". The cancel will fail because we use a
+# bogus queryId not present in the coordinator's catalog — that failure must
+# be SHAPE-equivalent at both gateways (same status, same error envelope).
+#
+# Diff policy notes:
+#   - Date, Content-Length, Server, Set-Cookie: per-request / per-instance.
+#     [JUSTIFIED]
+#   - errorLocation.lineNumber / columnNumber: Trino reports the offending
+#     position; identical for the same payload but kept here defensively in
+#     case Trino versions differ in column numbering. [JUSTIFIED]
+#   - errorName / errorCode / errorType: Trino's error taxonomy is the
+#     contract; we DO assert these match across gateways. NOT ignored.
+#   - id: error envelope from KILL on a missing queryId may or may not
+#     include the submitting queryId, depending on Trino. [JUSTIFIED]
+#   - infoUri: identical issue. [JUSTIFIED]
+name: seam6-killquery-routing
+description: POST KILL QUERY '<bogus>' to /v1/statement; both gateways must forward without mangling and return shape-equivalent error envelope
+steps:
+  - method: POST
+    path: /v1/statement
+    headers:
+      X-Trino-User: diff-harness
+      Content-Type: text/plain
+    body: "KILL QUERY '20240101_000000_99999_bogus'"
+diff:
+  ignoreHeaders:
+    - Date
+    - Content-Length
+    - Server
+    - Set-Cookie
+  ignoreBodyFields:
+    - id
+    - infoUri
+    - nextUri
+    - stats.elapsedTimeMillis
+    - stats.queuedTimeMillis
+  rewriteHostPort: true

@@ -1,0 +1,70 @@
+# Seam 5 — Async statement polling honors Trino's nextUri loop without the
+# gateway interfering with the long-poll semantics.
+#
+# Java reference: ProxyRequestHandler does not transform nextUri or inject
+#                 timeouts on async polls; the client follows nextUri until
+#                 Trino omits the field.
+# Go reference:   internal/proxy/forward.go streams the upstream response
+#                 verbatim (Hard Invariant #1); the recovery chain is queryId
+#                 aware so each poll hits the same backend.
+#
+# Live-mode observability: SELECT 1 completes within a few polls. We loop GET
+# on nextUri until the field is absent (max 20 iterations as a safety net).
+# Both gateways MUST converge on a terminal response with the same shape.
+#
+# Diff policy notes:
+#   - Date, Content-Length, Server, Set-Cookie: per-request / per-instance.
+#     [JUSTIFIED]
+#   - id, nextUri, infoUri, partialCancelUri: queryId varies. [JUSTIFIED]
+#   - stats.*Millis / stats.* counters: timing- and execution-shape-dependent.
+#     [JUSTIFIED]
+#   - stats.state: even at terminal we may see FINISHED vs FINISHING depending
+#     on whether the final flush has landed; the seam is "loop terminates",
+#     not "exact state value". [JUSTIFIED]
+#   - data: SELECT 1 returns [[1]] eventually but on the terminal poll the
+#     data array may be absent if it was streamed in an earlier poll. The
+#     diff is shape-of-the-loop, not data-payload. [JUSTIFIED]
+#   - warnings: non-deterministic. [JUSTIFIED]
+name: seam5-async-timeout
+description: POST /v1/statement then poll nextUri until terminal; assert both gateways drive Trino's statement protocol to completion with equivalent shape
+steps:
+  - method: POST
+    path: /v1/statement
+    headers:
+      X-Trino-User: diff-harness
+      Content-Type: text/plain
+    body: "SELECT 1"
+    extract:
+      nextUri: $.nextUri
+  - method: GET
+    pathFromVar: nextUri
+    headers:
+      X-Trino-User: diff-harness
+    extract:
+      nextUri: $.nextUri
+    repeatUntil:
+      noField: nextUri
+      maxIterations: 20
+diff:
+  ignoreHeaders:
+    - Date
+    - Content-Length
+    - Server
+    - Set-Cookie
+  ignoreBodyFields:
+    - id
+    - nextUri
+    - infoUri
+    - partialCancelUri
+    - stats.elapsedTimeMillis
+    - stats.queuedTimeMillis
+    - stats.cpuTimeMillis
+    - stats.wallTimeMillis
+    - stats.processedRows
+    - stats.processedBytes
+    - stats.peakMemoryBytes
+    - stats.physicalInputBytes
+    - stats.state
+    - data
+    - warnings
+  rewriteHostPort: true

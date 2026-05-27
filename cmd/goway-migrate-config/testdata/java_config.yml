@@ -1,0 +1,42 @@
+requestRouter:
+  port: 8080
+  name: trino-gateway
+  historySize: 1000
+  requestBufferSize: 1048576
+
+dataStore:
+  localPort: 8083
+  jdbcUrl: jdbc:postgresql://localhost:5432/trinogateway
+  user: pguser
+  password: pgpass
+  driver: org.postgresql.Driver
+
+backendState:
+  healthCheckPath: /v1/info
+  concurrency: 50
+  healthCheckInterval: 30000
+
+routing:
+  defaultRoutingGroup: adhoc
+  rulesType: EXTERNAL
+  externalUrl: http://router-service/route
+
+clusterStatsConfiguration:
+  useApi: false
+
+authentication:
+  defaultType: oauth2
+  oauth2:
+    issuer: https://auth.example.com
+    clientId: my-client
+    clientSecret: secret
+    redirectUrl: https://gw.example.com/oauth2/callback
+    jwkUrl: https://auth.example.com/.well-known/jwks.json
+
+authorization:
+  admin: admin_group
+  user: user_group
+  api: api_group
+
+modules: []
+managedApps: []

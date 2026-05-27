@@ -121,16 +121,26 @@ type RoutingConfig struct {
 
 // ExternalConfig holds configuration for the external routing transport.
 type ExternalConfig struct {
-	URL      string   `yaml:"url"`      // HTTP transport URL
-	GRPCAddr string   `yaml:"grpcAddr"` // gRPC address (host:port)
-	Timeout  Duration `yaml:"timeout"`  // default 1s
+	URL            string   `yaml:"url"`            // HTTP transport URL
+	GRPCAddr       string   `yaml:"grpcAddr"`       // gRPC address (host:port)
+	Timeout        Duration `yaml:"timeout"`        // default 1s
+	ExcludeHeaders []string `yaml:"excludeHeaders"` // headers stripped from routing requests and external-header responses
 }
 
 // AuthConfig holds authentication configuration.
 type AuthConfig struct {
-	Type string     `yaml:"type"` // "OIDC", "LDAP", "NOOP"
-	OIDC OIDCConfig `yaml:"oidc"`
-	LDAP LDAPConfig `yaml:"ldap"`
+	Type          string              `yaml:"type"`          // "OIDC", "LDAP", "NOOP"
+	OIDC          OIDCConfig          `yaml:"oidc"`
+	LDAP          LDAPConfig          `yaml:"ldap"`
+	Authorization AuthorizationConfig `yaml:"authorization"`
+}
+
+// AuthorizationConfig holds regex patterns for role resolution.
+// Each field is a Java-compatible regex matched against the principal's memberOf string.
+type AuthorizationConfig struct {
+	AdminRegex string `yaml:"admin"` // regex for ADMIN role
+	UserRegex  string `yaml:"user"`  // regex for USER role
+	APIRegex   string `yaml:"api"`   // regex for API role
 }
 
 // OIDCConfig holds OpenID Connect authentication configuration.

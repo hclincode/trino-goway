@@ -1,0 +1,58 @@
+# Seam 8 — Upstream error passthrough.
+#
+# Java reference: ProxyRequestHandler forwards upstream non-2xx responses
+#                 verbatim (status, headers, body); it does not synthesize
+#                 its own error envelope.
+# Go reference:   internal/proxy/forward.go streams every upstream response
+#                 (Hard Invariant #1); error envelopes are upstream's.
+#
+# Live-mode observability: submit a syntactically valid POST whose SQL is
+# guaranteed to fail at parse time. Trino returns a 200 + error envelope
+# (Trino's statement protocol carries query errors INSIDE the response body
+# rather than as HTTP non-2xx). Both gateways MUST forward the body shape
+# verbatim. If a gateway accidentally replaced or wrapped the envelope the
+# differential check fails.
+#
+# We choose `SELECT * FROM definitely_no_such_table_diff_harness` over a
+# parse error: it produces a deterministic SQL-error envelope without
+# triggering Trino's column-position output that drifts with version.
+#
+# Diff policy notes:
+#   - Date, Content-Length, Server, Set-Cookie: per-request / per-instance.
+#     [JUSTIFIED]
+#   - id, nextUri, infoUri, partialCancelUri: queryId varies. [JUSTIFIED]
+#   - error.errorLocation.lineNumber / columnNumber: defensive — different
+#     Trino versions may number positions differently. [JUSTIFIED]
+#   - error.failureInfo / error.stack: JVM-internal stack data leaks
+#     internal class names; not a wire contract. [JUSTIFIED]
+#   - stats.*Millis: timing. [JUSTIFIED]
+#   - warnings: non-deterministic. [JUSTIFIED]
+name: seam8-upstream-error
+description: POST SQL that hits a missing-table error; both gateways must forward Trino's error envelope verbatim
+steps:
+  - method: POST
+    path: /v1/statement
+    headers:
+      X-Trino-User: diff-harness
+      Content-Type: text/plain
+    body: "SELECT * FROM definitely_no_such_table_diff_harness"
+diff:
+  ignoreHeaders:
+    - Date
+    - Content-Length
+    - Server
+    - Set-Cookie
+  ignoreBodyFields:
+    - id
+    - nextUri
+    - infoUri
+    - partialCancelUri
+    - error.errorLocation
+    - error.failureInfo
+    - error.stack
+    - stats.elapsedTimeMillis
+    - stats.queuedTimeMillis
+    - stats.cpuTimeMillis
+    - stats.wallTimeMillis
+    - warnings
+  rewriteHostPort: true

@@ -1,0 +1,43 @@
+# Seam 7 — Cookie emission (TG.OAUTH2 wire compat).
+#
+# Java reference: GatewayCookie HMAC-SHA256 + airlift Duration format on TTL.
+# Go reference:   internal/proxy/cookie.go issues TG.OAUTH2 cookies in
+#                 wireCompat mode; internal/proxy/cookie_test.go covers
+#                 emission semantics.
+#
+# Live-mode observability: with authentication.type: "noop" on the Java
+# gateway and no cookie config on the Go gateway, NEITHER side issues
+# TG.OAUTH2 cookies on a noop /v1/info call. The differential assertion is
+# narrower: both gateways must behave IDENTICALLY on Set-Cookie — either both
+# emit none, or both emit the same shape. Set-Cookie is therefore NOT in
+# ignoreHeaders for this scenario (we want to catch any divergence).
+#
+# Deep cookie wire-compat is exercised by the unit tests in
+# internal/proxy/cookie_test.go. This live scenario gates "does either
+# gateway accidentally start emitting cookies the other doesn't?".
+#
+# Diff policy notes:
+#   - Date, Content-Length, Server: per-request / per-instance. [JUSTIFIED]
+#   - nodeId / coordinatorId / starting / nodeVersion / environment / uptime
+#     / startTime: vary by Trino container instance. [JUSTIFIED]
+name: seam7-cookie-emission
+description: GET /v1/info with no auth flow; assert NEITHER gateway emits TG.* cookies in noop mode (Set-Cookie deliberately NOT ignored)
+steps:
+  - method: GET
+    path: /v1/info
+    headers:
+      X-Trino-User: diff-harness
+diff:
+  ignoreHeaders:
+    - Date
+    - Content-Length
+    - Server
+  ignoreBodyFields:
+    - nodeId
+    - coordinatorId
+    - starting
+    - nodeVersion
+    - environment
+    - uptime
+    - startTime
+  rewriteHostPort: true

@@ -1,0 +1,65 @@
+# Seam 3 — Cache write before response flush (Hard Invariant #3).
+#
+# Java reference: RoutingManager#submitStatement writes queryId→backend to the
+#                 cache before returning the response to the client. If we
+#                 flushed first, the very next GET /v1/statement/<qid>/<n>
+#                 would race the cache and the recovery chain would have to
+#                 fire on every poll.
+# Go reference:   internal/proxy/forward.go calls Router.WriteCache before the
+#                 body is written; internal/proxy/proxy_test.go::
+#                 TestProxy_Seam3_CacheWriteBeforeResponseFlush covers ordering.
+#
+# Live-mode observability: we cannot directly observe a cache write from the
+# wire. But we can observe its CONSEQUENCE — POST /v1/statement followed by an
+# immediate GET on the returned nextUri must succeed at both gateways with the
+# same shape. If a gateway skipped or delayed the cache write, the GET could
+# fail or route to the wrong backend, producing a divergent body.
+#
+# Diff policy notes:
+#   - Date, Content-Length, Server: same as seam2. [JUSTIFIED]
+#   - id, nextUri, infoUri, partialCancelUri: Trino mints new queryIds per
+#     submission, so values differ across the two gateway runs. Structural
+#     shape is what we assert. [JUSTIFIED]
+#   - stats.*Millis / stats.*Time / stats.elapsed*: timing differs every run.
+#     [JUSTIFIED]
+#   - state / queryStats: poll-timing dependent; the final GET may land in
+#     QUEUED, RUNNING, or FINISHED depending on cluster warmth. [JUSTIFIED]
+#   - warnings: Trino's warning emitter is non-deterministic across runs.
+#     [JUSTIFIED]
+name: seam3-cache-write-before-flush
+description: POST /v1/statement, immediately GET the returned nextUri — proves both gateways serve the follow-up from cache (or equivalent fast path) without errors
+steps:
+  - method: POST
+    path: /v1/statement
+    headers:
+      X-Trino-User: diff-harness
+      Content-Type: text/plain
+    body: "SELECT 1"
+    extract:
+      next: $.nextUri
+  - method: GET
+    pathFromVar: next
+    headers:
+      X-Trino-User: diff-harness
+diff:
+  ignoreHeaders:
+    - Date
+    - Content-Length
+    - Server
+    - Set-Cookie
+  ignoreBodyFields:
+    - id
+    - nextUri
+    - infoUri
+    - partialCancelUri
+    - stats.elapsedTimeMillis
+    - stats.queuedTimeMillis
+    - stats.cpuTimeMillis
+    - stats.wallTimeMillis
+    - stats.processedRows
+    - stats.processedBytes
+    - stats.peakMemoryBytes
+    - stats.physicalInputBytes
+    - stats.state
+    - warnings
+  rewriteHostPort: true

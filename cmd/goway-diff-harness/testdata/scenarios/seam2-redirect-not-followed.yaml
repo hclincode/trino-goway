@@ -1,0 +1,44 @@
+# Seam 2 — Gateway must NOT follow upstream redirects (Hard Invariant #2).
+#
+# Java reference: ProxyRequestHandler.java constructs an HttpClient with
+#                 RedirectPolicy.NEVER. If the gateway followed redirects, the
+#                 client's nextUri chain would silently bypass the gateway.
+# Go reference:   cmd/trino-goway/main.go installs CheckRedirect=ErrUseLastResponse
+#                 on proxyClient; internal/proxy/proxy_test.go::
+#                 TestProxy_Seam2_RedirectFollowingDisabled covers the unit.
+#
+# Live-mode observability: Trino does not 3xx on /v1/info or /v1/statement, so
+# we exercise the same property via GET /v1/info — both gateways MUST receive
+# Trino's 200, and neither may rewrite the body. If a gateway accidentally
+# followed a redirect, the response shape would diverge silently.
+#
+# Diff policy notes:
+#   - Date: per-request timestamp. [JUSTIFIED]
+#   - Content-Length: depends on host-rewriting and Trino's coordinator
+#     identity strings; safe. [JUSTIFIED]
+#   - Server: each gateway sets its own; not part of the seam contract.
+#     [JUSTIFIED]
+#   - nodeId / coordinatorId / starting / nodeVersion / environment: vary by
+#     Trino container instance; structural shape is the assertion, not
+#     values. [JUSTIFIED]
+name: seam2-redirect-not-followed
+description: GET /v1/info; assert both gateways return Trino's 200 verbatim — neither follows nor synthesizes a redirect
+steps:
+  - method: GET
+    path: /v1/info
+    headers:
+      X-Trino-User: diff-harness
+diff:
+  ignoreHeaders:
+    - Date
+    - Content-Length
+    - Server
+  ignoreBodyFields:
+    - nodeId
+    - coordinatorId
+    - starting
+    - nodeVersion
+    - environment
+    - uptime
+    - startTime
+  rewriteHostPort: true

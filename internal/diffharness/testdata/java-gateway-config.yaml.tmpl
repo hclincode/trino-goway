@@ -1,0 +1,31 @@
+# Java trino-gateway config rendered at test time by
+# internal/diffharness/bootstrap.go. Hostnames "postgres" and "trino" resolve
+# via the testcontainers user-defined network created in BootstrapContainers.
+#
+# The gateway listens on 8080 inside the container; the host loopback port is
+# assigned by testcontainers MappedPort.
+
+serverConfig:
+  node.environment: diff-harness
+  http-server.http.port: 8080
+
+# Anonymous access — the differential harness drives the gateway directly,
+# we do not exercise OAuth/LDAP paths here.
+authentication:
+  authenticationType: "noop"
+
+# Backends are seeded post-boot via registerBackend() POSTing to
+# /entity?entityType=GATEWAY_BACKEND. routingRules deliberately disabled so
+# every request lands on the single seeded backend.
+routingRules:
+  rulesEngineEnabled: False
+
+dataStore:
+  jdbcUrl: jdbc:postgresql://postgres:5432/{{.DBName}}
+  user: {{.DBUser}}
+  password: {{.DBPass}}
+  driver: org.postgresql.Driver
+  queryHistoryHoursRetention: 24
+
+clusterStatsConfiguration:
+  monitorType: INFO_API

@@ -128,6 +128,61 @@ func TestServer_Stop_GracefulShutdown(t *testing.T) {
 	}
 }
 
+func TestServer_Listen_BindsBeforeServe(t *testing.T) {
+	proxySrv := newTestServer(t)
+	adminSrv := newTestServer(t)
+
+	log := slog.Default()
+	srv := lifecycle.New(proxySrv, adminSrv, log)
+
+	require.NoError(t, srv.Listen(), "Listen must succeed")
+
+	// After Listen, the OS owns the ports — a second bind on the same address must fail.
+	if l, err := net.Listen("tcp", proxySrv.Addr); err == nil {
+		_ = l.Close()
+		t.Fatalf("expected double-bind on %s to fail after Listen", proxySrv.Addr)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	startErrCh := make(chan error, 1)
+	// goroutine exits when Start returns after ctx cancellation
+	go func() {
+		startErrCh <- srv.Start(ctx)
+	}()
+
+	waitForReady(t, fmt.Sprintf("http://%s/", proxySrv.Addr))
+	waitForReady(t, fmt.Sprintf("http://%s/", adminSrv.Addr))
+
+	cancel()
+	select {
+	case err := <-startErrCh:
+		assert.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start did not return after ctx cancellation")
+	}
+}
+
+func TestServer_Listen_FailsWhenPortInUse(t *testing.T) {
+	// Hold the proxy port so Listen will collide.
+	port := freePort(t)
+	blocker, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	require.NoError(t, err)
+	defer func() { _ = blocker.Close() }()
+
+	proxySrv := &http.Server{Addr: fmt.Sprintf("127.0.0.1:%d", port)}
+	adminSrv := newTestServer(t)
+
+	srv := lifecycle.New(proxySrv, adminSrv, slog.Default())
+
+	err = srv.Listen()
+	require.Error(t, err, "Listen must fail when proxy port is in use")
+
+	// admin port must not remain bound after the partial-bind cleanup.
+	l, err := net.Listen("tcp", adminSrv.Addr)
+	require.NoError(t, err, "admin port should be released after Listen failure")
+	_ = l.Close()
+}
+
 // waitForReady polls url until it responds with 200 or the deadline elapses.
 func waitForReady(t *testing.T, url string) {
 	t.Helper()

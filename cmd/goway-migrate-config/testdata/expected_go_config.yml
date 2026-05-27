@@ -1,0 +1,31 @@
+# WARNING: requestRouter.historySize=1000 has no Go equivalent, ignored
+# WARNING: requestRouter.name="trino-gateway" has no Go equivalent, ignored
+# WARNING: dataStore.user="pguser": embed credentials in db.dsn instead, ignored
+# WARNING: dataStore.password: embed credentials in db.dsn instead, ignored
+# WARNING: backendState.concurrency is handled automatically, ignored
+# WARNING: backendState.healthCheckPath="/v1/info" has no Go equivalent, ignored
+# WARNING: authentication.oauth2.redirectUrl="https://gw.example.com/oauth2/callback" has no Go equivalent, ignored
+# WARNING: authorization block has no Go equivalent, ignored
+
+proxy:
+    port: 8080
+    responseSize: 1MiB
+admin:
+    port: 8083
+monitor:
+    interval: 30s
+db:
+    driver: postgres
+    dsn: postgresql://localhost:5432/trinogateway
+routing:
+    defaultGroup: adhoc
+    type: EXTERNAL
+    external:
+        url: http://router-service/route
+auth:
+    type: OIDC
+    oidc:
+        issuerUrl: https://auth.example.com
+        clientId: my-client
+        clientSecret: secret
+        jwksUrl: https://auth.example.com/.well-known/jwks.json

@@ -1,0 +1,52 @@
+# Seam 4 — Router-result handling (proxy forwards to whatever URL the Router
+# returns; the 3-step recovery chain lives in internal/routing).
+#
+# Java reference: ProxyRequestHandler delegates routing to RoutingManager and
+#                 forwards to whatever backend URL is returned. The recovery
+#                 chain (cache → history → HEAD probe → first-active) is owned
+#                 by the routing layer.
+# Go reference:   internal/proxy/proxy.go calls router.Route and forwards to
+#                 the returned BackendURL; internal/proxy/proxy_test.go::
+#                 TestProxy_Seam4_RouterResultHandling covers the unit;
+#                 internal/proxy/proxy_qa_test.go covers the empty-URL
+#                 fail-closed companion.
+#
+# Live-mode observability: both gateways have exactly one active backend (the
+# shared Trino container). Whichever recovery step fires, both gateways MUST
+# land on that same backend. We exercise the most common path — POST a new
+# statement, which forces the router to invoke the EXTERNAL selector (no
+# external service configured → falls through to default group → resolves to
+# the one active backend).
+#
+# Diff policy notes:
+#   - Date, Content-Length, Server: same as seam2. [JUSTIFIED]
+#   - id, nextUri, infoUri, partialCancelUri: queryId minted per call.
+#     [JUSTIFIED]
+#   - stats.*Millis: timing. [JUSTIFIED]
+#   - warnings: non-deterministic warning emitter. [JUSTIFIED]
+name: seam4-router-result-handling
+description: POST /v1/statement; both gateways MUST route to the one active backend and return Trino's response shape verbatim
+steps:
+  - method: POST
+    path: /v1/statement
+    headers:
+      X-Trino-User: diff-harness
+      Content-Type: text/plain
+    body: "SELECT 1"
+diff:
+  ignoreHeaders:
+    - Date
+    - Content-Length
+    - Server
+    - Set-Cookie
+  ignoreBodyFields:
+    - id
+    - nextUri
+    - infoUri
+    - partialCancelUri
+    - stats.elapsedTimeMillis
+    - stats.queuedTimeMillis
+    - stats.cpuTimeMillis
+    - stats.wallTimeMillis
+    - warnings
+  rewriteHostPort: true

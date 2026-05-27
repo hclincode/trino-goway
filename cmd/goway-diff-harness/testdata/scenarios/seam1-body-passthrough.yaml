@@ -1,0 +1,37 @@
+# Seam 1 — Never rewrite response body.
+#
+# Java reference: ProxyRequestHandler.java:269-301 (the gateway reads the body
+# to extract queryId but writes back upstream's bytes verbatim).
+# Go reference:   internal/proxy/forward.go:60-72 (Hard Invariant #1).
+#
+# Diff policy notes:
+#   - Date: timestamp differs every call; safe to ignore. [JUSTIFIED]
+#   - Content-Length: depends on host:port length after host rewrite; safe. [JUSTIFIED]
+#   - id, nextUri: Trino mints new queryIds per call; can't be equal across
+#     Java vs. Go runs against the same backend. Stripped from body diff so
+#     structural shape is what we assert. [JUSTIFIED]
+#   - rewriteHostPort: both gateways bind different ports; nextUri host:port
+#     is replaced with <GATEWAY> on both sides so the JSON path is equivalent.
+name: seam1-body-passthrough
+description: POST /v1/statement; assert both gateways forward the upstream body shape verbatim
+steps:
+  - method: POST
+    path: /v1/statement
+    headers:
+      X-Trino-User: diff-harness
+      Content-Type: text/plain
+    body: "SELECT 1"
+diff:
+  ignoreHeaders:
+    - Date
+    - Content-Length
+    - Server
+    - Set-Cookie
+  ignoreBodyFields:
+    - id
+    - nextUri
+    - infoUri
+    - partialCancelUri
+    - stats.elapsedTimeMillis
+    - stats.queuedTimeMillis
+  rewriteHostPort: true

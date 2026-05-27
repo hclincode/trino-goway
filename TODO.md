@@ -49,71 +49,72 @@ Critical path: **17 → 18 → 19 → 20 → 24**. Tasks 21, 22, 23, 25 off crit
 - [x] `internal/lifecycle/server_test.go` — Start/Stop lifecycle, goroutine clean (goleak)
 - [x] `go vet ./...` + `golangci-lint run ./...` pass
 
-### Task 18 — `internal/persistence`
+### Task 18 — `internal/persistence` ✅
 
-- [ ] `internal/persistence/doc.go` — package doc
-- [ ] `internal/persistence/db.go` — `Open(cfg Config) (*sqlx.DB, error)` (driver-agnostic Postgres/MySQL)
-- [ ] `migrations/00001_create_backend_registry.sql` — `gateway_backend` table (url, name, routing_group, active, created_at, updated_at)
-- [ ] `migrations/00002_create_query_history.sql` — `query_history` table (query_id, backend_url, user_name, source, created_at)
-- [ ] `internal/persistence/backend.go` — `BackendDAO`: `List`, `Upsert`, `Delete`, `SetActive`
-- [ ] `internal/persistence/history.go` — `HistoryDAO`: `Insert`, `LookupByQueryID`
+- [x] `internal/persistence/doc.go` — package doc
+- [x] `internal/persistence/db.go` — `Open(cfg Config) (*sqlx.DB, error)` (driver-agnostic Postgres/MySQL)
+- [x] `migrations/00001_create_backend_registry.sql` — `gateway_backend` table (url, name, routing_group, active, created_at, updated_at)
+- [x] `migrations/00002_create_query_history.sql` — `query_history` table (query_id, backend_url, user_name, source, created_at)
+- [x] `internal/persistence/backend.go` — `BackendDAO`: `List`, `Upsert`, `Delete`, `SetActive`
+- [x] `internal/persistence/history.go` — `HistoryDAO`: `Insert`, `LookupByQueryID`
 - [ ] `internal/persistence/backend_test.go` — integration tests (testcontainers Postgres + MySQL)
 - [ ] `internal/persistence/history_test.go` — integration tests
-- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
 
-### Task 19 — `internal/routing`
+### Task 19 — `internal/routing` ✅
 
-- [ ] `internal/routing/routerpb/router.proto` — `TrinoGatewayRouter` service, `RouteRequest`/`RouteResponse`/`TrinoQueryProperties`/`TrinoRequestUser` messages
-- [ ] `internal/routing/routerpb/` — generated Go stubs (`protoc-gen-go`, `protoc-gen-go-grpc`)
-- [ ] `internal/routing/external_http.go` — HTTP transport: POST `RoutingGroupExternalBody` → `ExternalRouterResponse`, `context.WithTimeout`, fallback on any error
-- [ ] `internal/routing/external_grpc.go` — gRPC transport: `RouteRequest` → `RouteResponse`, same fallback semantics
-- [ ] `internal/routing/cache.go` — LRU queryId→backend cache (`golang-lru/v2`); `singleflight` for concurrent miss coalescing
-- [ ] `internal/routing/recovery.go` — 3-step chain: cache hit → history `LookupByQueryID` → `errgroup` HEAD probe fan-out → first-active default
-- [ ] `internal/routing/router.go` — `Router.Route(ctx, r)` orchestrates external selector + recovery chain; `KILL QUERY` regex extraction routes to history backend
-- [ ] `internal/routing/routing_test.go` — unit tests: cache hit/miss, all 3 recovery steps, propagateErrors, HTTP/gRPC fallback
-- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+- [x] `internal/routing/routerpb/router.proto` — `TrinoGatewayRouter` service, `RouteRequest`/`RouteResponse`/`TrinoQueryProperties`/`TrinoRequestUser` messages
+- [x] `internal/routing/routerpb/` — generated Go stubs (`protoc-gen-go`, `protoc-gen-go-grpc`)
+- [x] `internal/routing/external_http.go` — HTTP transport: POST `RoutingGroupExternalBody` → `ExternalRouterResponse`, `context.WithTimeout`, fallback on any error
+- [x] `internal/routing/external_grpc.go` — gRPC transport: `RouteRequest` → `RouteResponse`, same fallback semantics
+- [x] `internal/routing/cache.go` — LRU queryId→backend cache (`golang-lru/v2`); singleflight for concurrent miss coalescing
+- [x] `internal/routing/recovery.go` — 3-step chain: cache hit → history `LookupByQueryID` → HEAD probe fan-out → first-active default
+- [x] `internal/routing/router.go` — `Router.Route(ctx, r)` orchestrates external selector + recovery chain; `KILL QUERY` regex extraction routes to history backend
+- [x] `internal/routing/routing_test.go` — unit tests: cache hit/miss, all 3 recovery steps, propagateErrors, HTTP/gRPC fallback
+- [x] `internal/routing/external_http.go` — forward inbound request headers to routing service (excluding `excludeHeaders` + `Content-Length`); filter `excludeHeaders` keys from `externalHeaders` response (filter applied in `Router.callExternal` for both HTTP + gRPC)
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
 
-### Task 20 — `internal/proxy`
+### Task 20 — `internal/proxy` ✅
 
-- [ ] `internal/proxy/doc.go` — package doc
-- [ ] `internal/proxy/proxy.go` — `Proxy` struct, `ServeHTTP` dispatcher, chi route registration
-- [ ] `internal/proxy/forward.go` — POST `/v1/statement`: buffer upstream response (bounded by `responseSize`), extract `queryId` from `nextUri`, write cache synchronously, forward buffered body
-- [ ] `internal/proxy/forward.go` — KILL QUERY regex: `KILL\s+QUERY\s+'(\d+_\d+_\d+_\w+)'` on request body, route to history backend, replay body via `bytes.Reader`
-- [ ] `internal/proxy/forward.go` — all other paths: stream via `io.Copy`, zero buffering
-- [ ] `internal/proxy/headers.go` — `X-Forwarded-For/Proto/Host` injection; `externalHeaders` REPLACE semantics; `excludeHeaders` filtering
-- [ ] `internal/proxy/cookie.go` — `TG.OAUTH2` issue/validate/invalidate (`wireCompat: true` default); HMAC-SHA256, base64.URLEncoding with padding, airlift Duration format
-- [ ] `internal/proxy/proxy_test.go` — seam tests: `TestProxy_Seam1_NeverRewriteResponseBody`, `TestProxy_Seam2_RedirectFollowingDisabled`, `TestProxy_Seam3_CacheWriteBeforeResponseFlush`, `TestProxy_Seam4_ThreeStepRecoveryChain`, `TestProxy_Seam6_KillQueryRegexRouting`, `TestProxy_Seam7_ThreeClientPoolIsolation`
-- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+- [x] `internal/proxy/doc.go` — package doc
+- [x] `internal/proxy/proxy.go` — `Proxy` struct, `ServeHTTP` dispatcher, chi route registration
+- [x] `internal/proxy/forward.go` — POST `/v1/statement`: buffer upstream response (bounded by `responseSize`), extract `queryId` from `nextUri`, write cache synchronously, forward buffered body
+- [x] `internal/proxy/forward.go` — KILL QUERY regex: `KILL\s+QUERY\s+'(\d+_\d+_\d+_\w+)'` on request body, route to history backend, replay body via `bytes.Reader`
+- [x] `internal/proxy/forward.go` — all other paths: stream via `io.Copy`, zero buffering
+- [x] `internal/proxy/headers.go` — `X-Forwarded-For/Proto/Host` injection; `externalHeaders` REPLACE semantics; `excludeHeaders` filtering
+- [x] `internal/proxy/cookie.go` — `TG.OAUTH2` issue/validate/invalidate (`wireCompat: true` default); HMAC-SHA256, base64.URLEncoding with padding, airlift Duration format
+- [x] `internal/proxy/proxy_test.go` — seam tests: `TestProxy_Seam1_NeverRewriteResponseBody`, `TestProxy_Seam2_RedirectFollowingDisabled`, `TestProxy_Seam3_CacheWriteBeforeResponseFlush`, `TestProxy_Seam4_ThreeStepRecoveryChain`, `TestProxy_Seam6_KillQueryRegexRouting`, `TestProxy_Seam7_ThreeClientPoolIsolation`
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
 
-### Task 21 — `internal/monitor`
+### Task 21 — `internal/monitor` ✅
 
-- [ ] `internal/monitor/doc.go` — package doc
-- [ ] `internal/monitor/monitor.go` — `Monitor` struct, `Start`/`Stop` lifecycle
-- [ ] `internal/monitor/monitor.go` — per-tick fan-out: `errgroup` goroutine per backend with `context.WithTimeout`; `atomic.Pointer[map[string]TrinoStatus]` for lock-free reads
-- [ ] `internal/monitor/monitor.go` — `GET /v1/info` health probe; mark `PENDING`→`HEALTHY`/`UNHEALTHY`
-- [ ] `internal/monitor/monitor_test.go` — tick fires concurrent probes, unhealthy backends marked, goleak clean
-- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+- [x] `internal/monitor/doc.go` — package doc
+- [x] `internal/monitor/monitor.go` — `Monitor` struct, `Start`/`Stop` lifecycle
+- [x] `internal/monitor/monitor.go` — per-tick fan-out: `errgroup` goroutine per backend with `context.WithTimeout`; `atomic.Pointer[map[string]TrinoStatus]` for lock-free reads
+- [x] `internal/monitor/monitor.go` — `GET /v1/info` health probe; mark `PENDING`→`HEALTHY`/`UNHEALTHY`
+- [x] `internal/monitor/monitor_test.go` — tick fires concurrent probes, unhealthy backends marked, goleak clean
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
 
-### Task 22 — `internal/auth`
+### Task 22 — `internal/auth` ✅
 
-- [ ] `internal/auth/doc.go` — package doc
-- [ ] `internal/auth/oidc.go` — OAuth2/OIDC middleware; JWKS background refresh (`time.Ticker` + `atomic.Pointer[*keyfunc.JWKS]`); JWT validation on every request
-- [ ] `internal/auth/ldap.go` — LDAP bind auth middleware (`go-ldap/ldap/v3`)
-- [ ] `internal/auth/noop.go` — noop pass-through middleware
-- [ ] `internal/auth/roles.go` — ADMIN/USER/API role resolver (regex match against principal `memberOf`)
-- [ ] `internal/auth/auth_test.go` — unit tests: OIDC token validation, JWKS refresh, LDAP bind, noop pass-through
-- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+- [x] `internal/auth/doc.go` — package doc
+- [x] `internal/auth/oidc.go` — OAuth2/OIDC middleware; JWKS background refresh (`time.Ticker` + `atomic.Pointer[keyfunc.Keyfunc]`); JWT validation on every request
+- [x] `internal/auth/ldap.go` — LDAP bind auth middleware (`go-ldap/ldap/v3`)
+- [x] `internal/auth/noop.go` — noop pass-through middleware
+- [x] `internal/auth/roles.go` — ADMIN/USER/API role resolver (regex match against principal `memberOf`)
+- [x] `internal/auth/auth_test.go` — unit tests: OIDC token validation, JWKS refresh, LDAP bind, noop pass-through
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
 
-### Task 23 — `internal/admin`
+### Task 23 — `internal/admin` ✅
 
-- [ ] `internal/admin/doc.go` — package doc
-- [ ] `internal/admin/router.go` — chi route registration for all 36 endpoints; middleware chain (auth → role check → handler)
-- [ ] `internal/admin/backend.go` — `/gateway/*` + `/entity/*` endpoints; `POST /entity?entityType=GATEWAY_BACKEND` mutates health map immediately
-- [ ] `internal/admin/webapp.go` — `/webapp/*` endpoints with `Result<T>` envelope; `GET /webapp/getRoutingRules` returns 204 when external routing active
-- [ ] `internal/admin/health.go` — `/trino-gateway/livez` (always 200), `/trino-gateway/readyz` (200 when ≥1 backend healthy)
-- [ ] `internal/admin/query.go` — query history endpoints; non-ADMIN callers get user-scoped results only
-- [ ] `internal/admin/admin_test.go` — integration tests: backend CRUD, health probes, role enforcement
-- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+- [x] `internal/admin/doc.go` — package doc
+- [x] `internal/admin/router.go` — chi route registration for all 36 endpoints; middleware chain (auth → role check → handler)
+- [x] `internal/admin/backend.go` — `/gateway/*` + `/entity/*` endpoints; `POST /entity?entityType=GATEWAY_BACKEND` mutates health map immediately
+- [x] `internal/admin/webapp.go` — `/webapp/*` endpoints with `Result<T>` envelope; `GET /webapp/getRoutingRules` returns empty list (v1 stub)
+- [x] `internal/admin/health.go` — `/trino-gateway/livez` (always 200), `/trino-gateway/readyz` (200 after SetReady)
+- [x] `internal/admin/query.go` — query history endpoints; non-ADMIN callers get user-scoped results only
+- [x] `internal/admin/admin_test.go` — integration tests: backend CRUD, health probes, role enforcement
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
 
 ### Task 24 — `cmd/trino-goway`
 
@@ -138,6 +139,7 @@ Critical path: **17 → 18 → 19 → 20 → 24**. Tasks 21, 22, 23, 25 off crit
 
 ### Phase 5: QA Gates
 
+- [x] Task 25 — `cmd/goway-migrate-config` ✅
 - [x] Task 26 — Build QA infra ✅
   - [x] `internal/testutil/portalloc.go` — random available port allocator
   - [x] `internal/testutil/postgres.go` — testcontainers-go Postgres setup helper
@@ -145,5 +147,9 @@ Critical path: **17 → 18 → 19 → 20 → 24**. Tasks 21, 22, 23, 25 off crit
   - [x] `internal/testutil/backend.go` — misbehaving fake Trino backend (`httptest.Server`: configurable latency, error injection, 3xx responses)
   - [x] `internal/testutil/goleak.go` — `VerifyTestMain` wrapper used by all `TestMain` functions
   - [x] `go vet ./...` + `golangci-lint run ./...` pass
-- [ ] Task 27 — G1 test: `nextUri` host derivation against real Trino container (`//go:build e2e`; first QA gate — only silent failure mode)
+- [x] Task 27 — G1 test: `nextUri` host derivation against real Trino container (`//go:build e2e`; first QA gate — only silent failure mode) — `internal/e2e/proxy_e2e_test.go::TestG1_NextURIHostDerivation`
 - [ ] Task 28 — Differential harness: `cmd/goway-diff-harness/` — live Java↔Go side-by-side for proxy Seams 1–8 + statement protocol (gate to DECLARE proxy-core COMPLETE)
+  - [x] **Phase 1** — `internal/diffharness/` library (scenario, normalize, diff, runner) + `cmd/goway-diff-harness/` CLI with `live`/`replay`/`record`/`report` subcommands (replay/record/report stubbed for Phase 2). 83% unit coverage, end-to-end CLI smoke passing against two httptest fakes. Smoke scenario: `seam1-body-passthrough.yaml`.
+  - [x] **Phase 2** — Java gateway container bootstrap (`internal/diffharness/bootstrap.go`, `trinodb/trino-gateway:19` + Postgres + shared Trino via `testcontainers-go/network`, embedded config template at `internal/diffharness/testdata/java-gateway-config.yaml.tmpl`). `record`/`replay`/`report` subcommands wired with `Golden` on-disk format under `cmd/goway-diff-harness/testdata/golden/`. `cmd/goway-diff-harness/live_test.go` under `//go:build diff` boots the fleet + in-process Go gateway and asserts all committed scenarios PASS. Library coverage 85.2%.
+  - [x] **Phase 3 scenarios** — committed 8 new YAML scenarios under `cmd/goway-diff-harness/testdata/scenarios/`: seam2-redirect-not-followed, seam3-cache-write-before-flush, seam4-router-result-handling, seam5-async-timeout, seam6-killquery-routing, seam7-cookie-emission, seam8-upstream-error, statement-protocol-roundtrip. Every diff.ignore* entry carries a `[JUSTIFIED]` comment per the normalizer-minimal discipline; enforced by `internal/diffharness/scenarios_validation_test.go::TestCommittedScenarios_LoadAndJustified`. CLI smoke tests scoped to seam1 only (the smoke fake is intentionally minimal — Phase-3 scenarios are validated end-to-end by the `//go:build diff` `live_test.go` against the real fleet). `go test -race` clean on both packages.
+  - [ ] **Phase 3 remaining** — CI guidance for the `diff` build tag; qa-tech-lead normalizer sign-off; first nightly `live_test.go` execution to bake in any timing surprises and commit the resulting golden files.

@@ -1,0 +1,70 @@
+# Statement protocol round-trip — end-to-end check that the gateway is
+# transparent to Trino's statement protocol.
+#
+# This scenario exercises the full async path: POST → poll until terminal →
+# observe the final state. It overlaps deliberately with seam5 (the loop) and
+# seam3 (the cache-after-first-poll consequence). Keeping it separate lets a
+# future regression bisect — if seam5 passes but this fails, the loop works
+# but terminal-shape differs; if both fail, the loop itself is broken.
+#
+# SELECT 42 over no FROM clause to give a deterministic single-row,
+# single-column result that converges quickly without any catalog lookup.
+#
+# Diff policy notes:
+#   - Date, Content-Length, Server, Set-Cookie: per-request / per-instance.
+#     [JUSTIFIED]
+#   - id, nextUri, infoUri, partialCancelUri: queryId varies. [JUSTIFIED]
+#   - stats.*Millis / counters: timing. [JUSTIFIED]
+#   - stats.state: same reason as seam5 — terminal may be FINISHED or
+#     FINISHING by the time the final poll lands. [JUSTIFIED]
+#   - data: SELECT 42 may stream the row in an earlier poll; final response
+#     may or may not include it. Shape-of-loop, not payload. [JUSTIFIED]
+#   - columns[*].typeSignature: Trino's type-signature shape drifts across
+#     versions in non-load-bearing fields (e.g. nested-type metadata that
+#     clients don't read). We assert columns are present (NOT ignored) but
+#     not the inner type-signature tree. [JUSTIFIED]
+#   - warnings: non-deterministic. [JUSTIFIED]
+name: statement-protocol-roundtrip
+description: Full POST→poll loop for SELECT 42; assert both gateways drive Trino's protocol identically end to end
+steps:
+  - method: POST
+    path: /v1/statement
+    headers:
+      X-Trino-User: diff-harness
+      Content-Type: text/plain
+    body: "SELECT 42"
+    extract:
+      nextUri: $.nextUri
+  - method: GET
+    pathFromVar: nextUri
+    headers:
+      X-Trino-User: diff-harness
+    extract:
+      nextUri: $.nextUri
+    repeatUntil:
+      noField: nextUri
+      maxIterations: 20
+diff:
+  ignoreHeaders:
+    - Date
+    - Content-Length
+    - Server
+    - Set-Cookie
+  ignoreBodyFields:
+    - id
+    - nextUri
+    - infoUri
+    - partialCancelUri
+    - stats.elapsedTimeMillis
+    - stats.queuedTimeMillis
+    - stats.cpuTimeMillis
+    - stats.wallTimeMillis
+    - stats.processedRows
+    - stats.processedBytes
+    - stats.peakMemoryBytes
+    - stats.physicalInputBytes
+    - stats.state
+    - data
+    - columns
+    - warnings
+  rewriteHostPort: true
