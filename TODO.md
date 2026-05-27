@@ -135,6 +135,38 @@ Critical path: **17 → 18 → 19 → 20 → 24**. Tasks 21, 22, 23, 25 off crit
 - [ ] `go build ./cmd/goway-migrate-config` passes
 - [ ] `go vet ./...` + `golangci-lint run ./...` pass
 
+### Task 29 — `cmd/mock-external-router` (HTTP mock)
+
+Stand-alone HTTP server that acts as a drop-in external routing endpoint for local
+development and manual testing. Lets operators point `routing.external.url` at
+`http://localhost:<port>` and watch exactly what the gateway sends.
+
+- [ ] `cmd/mock-external-router/main.go` — `--port` flag (default 9000), `--group` flag (default `"default"`)
+- [ ] Handle `POST /route` (and any other path, so it works regardless of the configured URL suffix)
+- [ ] Pretty-print each incoming request body as indented JSON to stdout, prefixed with a timestamp
+- [ ] Always respond `200 OK` with `Content-Type: application/json` body:
+  ```json
+  {"routingGroup": "<group>", "errors": [], "externalHeaders": {}}
+  ```
+  where `<group>` comes from `--group`.
+- [ ] On bad JSON body: still print raw bytes, still return the default group (never 4xx — mirrors Java's lenient behaviour)
+- [ ] `go build ./cmd/mock-external-router` produces a static binary
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+
+### Task 30 — `cmd/mock-external-router-grpc` (gRPC mock) **[blocked by Task 29]**
+
+gRPC counterpart to Task 29. Implements the `TrinoGatewayRouter` service defined in
+`internal/routing/routerpb/router.proto` and behaves identically: print every
+`RouteRequest`, return a fixed `RouteResponse`.
+
+- [ ] `cmd/mock-external-router-grpc/main.go` — `--addr` flag (default `:9001`), `--group` flag (default `"default"`)
+- [ ] Implement `TrinoGatewayRouter.Route`: marshal `RouteRequest` to indented JSON via `protojson`, print to stdout with timestamp
+- [ ] Return `RouteResponse{RoutingGroup: <group>, Errors: [], ExternalHeaders: {}}` always
+- [ ] Use `google.golang.org/grpc` + `google.golang.org/protobuf/encoding/protojson` (both already in `go.mod`)
+- [ ] Register a gRPC reflection service so `grpcurl` can introspect without the `.proto`
+- [ ] `go build ./cmd/mock-external-router-grpc` produces a static binary
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+
 ## Backlog
 
 ### Phase 5: QA Gates
