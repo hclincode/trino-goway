@@ -150,6 +150,7 @@ development and manual testing. Lets operators point `routing.external.url` at
   ```
   where `<group>` comes from `--group`.
 - [ ] On bad JSON body: still print raw bytes, still return the default group (never 4xx — mirrors Java's lenient behaviour)
+- [ ] `cmd/mock-external-router/main_test.go` — table-driven: valid JSON body pretty-printed + correct response; non-JSON body doesn't 4xx; `--group` flag wires through to response; any path is handled
 - [ ] `go build ./cmd/mock-external-router` produces a static binary
 - [ ] `go vet ./...` + `golangci-lint run ./...` pass
 
@@ -164,6 +165,7 @@ gRPC counterpart to Task 29. Implements the `TrinoGatewayRouter` service defined
 - [ ] Return `RouteResponse{RoutingGroup: <group>, Errors: [], ExternalHeaders: {}}` always
 - [ ] Use `google.golang.org/grpc` + `google.golang.org/protobuf/encoding/protojson` (both already in `go.mod`)
 - [ ] Register a gRPC reflection service so `grpcurl` can introspect without the `.proto`
+- [ ] `cmd/mock-external-router-grpc/main_test.go` — dial the server in-process (`bufconn`): verify `Route` returns the configured group; verify `RouteRequest` fields are printed to a captured writer; verify reflection service is registered
 - [ ] `go build ./cmd/mock-external-router-grpc` produces a static binary
 - [ ] `go vet ./...` + `golangci-lint run ./...` pass
 
