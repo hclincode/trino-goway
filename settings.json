@@ -1,40 +1,14 @@
 {
   "env": {
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "GVM_ROOT": "/Users/hclin/.gvm",
+    "GOROOT": "/Users/hclin/.gvm/gos/go1.26.3",
+    "GOPATH": "/Users/hclin/.gvm/pkgsets/go1.26.3/global",
+    "PATH": "/Users/hclin/.gvm/pkgsets/go1.26.3/global/bin:/Users/hclin/.gvm/gos/go1.26.3/bin:/Users/hclin/.gvm/pkgsets/go1.26.3/global/overlay/bin:/Users/hclin/.gvm/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   },
   "permissions": {
     "allow": [
-      "WebSearch",
-      "WebFetch",
-      "Read",
-      "Write",
-      "Edit",
-      "Bash(git *)",
-      "Bash(find *)",
-      "Bash(ls *)",
-      "Bash(mkdir *)",
-      "Bash(cat *)",
-      "Bash(grep *)",
-      "Bash(go *)",
-      "Bash(source *)",
-      "Bash(gvm *)",
-      "Bash(wc *)",
-      "Bash(head *)",
-      "Bash(tail *)",
-      "Bash(echo *)",
-      "Bash(cp *)",
-      "Bash(mv *)",
-      "Bash(touch *)",
-      "Bash(chmod *)",
-      "Bash(sed *)",
-      "Bash(awk *)",
-      "Bash(sort *)",
-      "Bash(uniq *)",
-      "Bash(diff *)",
-      "Bash(curl *)",
-      "Bash(jq *)",
-      "Bash(source * && gvm * && go *)",
-      "Bash(/Users/hclin/.gvm/gos/go1.26.3/bin/go *)"
+      "Bash(*)"
     ]
   }
 }
