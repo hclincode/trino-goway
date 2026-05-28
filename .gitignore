@@ -36,4 +36,7 @@ go.work.sum
 
 # Compiled binaries (built locally)
 goway-migrate-config
+goway-diff-harness
+mock-external-router
+mock-external-router-grpc
 trino-goway
