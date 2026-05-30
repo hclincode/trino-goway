@@ -588,6 +588,28 @@ func TestAdmin_EntityEndpoints(t *testing.T) {
 	})
 }
 
+// TestAdmin_EntityAPI_UnknownTypeReturnsEmptyArray verifies that GET /entity/{otherType}
+// returns 200 with an empty JSON array, matching Java's "200 []" behaviour.
+func TestAdmin_EntityAPI_UnknownTypeReturnsEmptyArray(t *testing.T) {
+	bs := newFakeBackendStore()
+	hs := &fakeHistoryStore{}
+	sp := newFakeStatusProvider()
+	a := admin.New(adminCfgNoAuth(bs, hs, sp))
+
+	rec := do(a, http.MethodGet, "/entity/UNKNOWN_TYPE", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+
+	var items []interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil {
+		t.Fatalf("unmarshal: %v; raw=%s", err, rec.Body.String())
+	}
+	if len(items) != 0 {
+		t.Errorf("want empty array, got %d items: %v", len(items), items)
+	}
+}
+
 func TestAdmin_WebappEndpoints(t *testing.T) {
 	bs := newFakeBackendStore()
 	hs := &fakeHistoryStore{}

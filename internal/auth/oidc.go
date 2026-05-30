@@ -116,6 +116,16 @@ func (m *OIDCMiddleware) refresh(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// keyfunc.NewDefaultCtx swallows the first HTTP failure (NoErrorReturnFirstHTTPReq=true).
+	// Verify the JWKS actually loaded keys; otherwise treat it as a fetch failure so the
+	// previously-stored keyfunc (if any) is preserved.
+	keys, err := k.Storage().KeyReadAll(ctx)
+	if err != nil {
+		return fmt.Errorf("read keys: %w", err)
+	}
+	if len(keys) == 0 {
+		return fmt.Errorf("JWKS %q returned no keys", m.cfg.JWKSURL)
+	}
 	m.jwks.Store(&k)
 	return nil
 }

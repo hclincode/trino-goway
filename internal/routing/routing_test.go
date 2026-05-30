@@ -3,10 +3,14 @@ package routing
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -321,3 +325,158 @@ func TestRouter_FilterExcludedHeaders(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// TestCache_LRUEvictionAt4096 verifies that inserting one entry beyond the default
+// LRU capacity evicts the oldest entry (key 0).
+func TestCache_LRUEvictionAt4096(t *testing.T) {
+	c, err := newQueryCache(defaultCacheSize)
+	require.NoError(t, err)
+
+	for i := 0; i < defaultCacheSize+1; i++ {
+		c.set(fmt.Sprintf("key-%d", i), fmt.Sprintf("http://backend-%d", i))
+	}
+
+	_, ok := c.get("key-0")
+	assert.False(t, ok, "key-0 must be evicted after inserting 4097 entries")
+
+	url, ok := c.get(fmt.Sprintf("key-%d", defaultCacheSize))
+	assert.True(t, ok, "newest entry must be retrievable")
+	assert.Equal(t, fmt.Sprintf("http://backend-%d", defaultCacheSize), url)
+}
+
+// countingHistory wraps a fakeHistory with an atomic counter, used to verify that
+// singleflight coalesces concurrent KILL QUERY history lookups for the same queryID.
+type countingHistory struct {
+	calls atomic.Int32
+	gate  chan struct{} // when non-nil, blocks LookupByQueryID until closed
+	data  map[string]string
+}
+
+func (c *countingHistory) LookupByQueryID(_ context.Context, queryID string) (string, error) {
+	c.calls.Add(1)
+	if c.gate != nil {
+		<-c.gate
+	}
+	return c.data[queryID], nil
+}
+
+// TestRouter_KillQuery_SingleflightCoalesces verifies that N concurrent KILL QUERY
+// requests for the same queryID result in exactly one history lookup (singleflight).
+//
+// To make the coalescing deterministic, the history lookup blocks on `gate` and the
+// test waits until the singleflight's followers WaitGroup counter has actually
+// reached N-1 (i.e. all N-1 followers are blocked in c.wg.Wait()) before releasing
+// the gate. We observe the counter indirectly via `runtime.NumGoroutine()` plus a
+// stable-count check on the singleflight in-flight map.
+func TestRouter_KillQuery_SingleflightCoalesces(t *testing.T) {
+	const queryID = "20240101_000000_00099_singleflight"
+	hist := &countingHistory{
+		gate: make(chan struct{}),
+		data: map[string]string{queryID: "http://trino-history:8080"},
+	}
+	bl := &fakeBackends{backends: []ActiveBackend{
+		{Name: "h", URL: "http://trino-history:8080", RoutingGroup: "default"},
+	}}
+	r := buildRouter(t, &http.Client{}, hist, bl)
+
+	const concurrency = 50
+	var doneWG sync.WaitGroup
+	doneWG.Add(concurrency)
+	results := make([]string, concurrency)
+	errs := make([]error, concurrency)
+	started := make(chan struct{}, concurrency)
+
+	for i := 0; i < concurrency; i++ {
+		i := i
+		go func() {
+			defer doneWG.Done()
+			req := &RouteInput{
+				Method:     "POST",
+				RequestURI: "/v1/statement",
+				Body:       fmt.Sprintf(`KILL QUERY '%s'`, queryID),
+				headers:    make(http.Header),
+			}
+			started <- struct{}{}
+			res, err := r.Route(context.Background(), req)
+			if err == nil && res != nil {
+				results[i] = res.BackendURL
+			}
+			errs[i] = err
+		}()
+	}
+
+	// All goroutines have entered Route by the time we've drained `started`.
+	for i := 0; i < concurrency; i++ {
+		<-started
+	}
+
+	// Spin until the leader is registered in the singleflight map AND the lookup
+	// has been entered (calls >= 1). After that, yield the scheduler aggressively
+	// to give followers time to acquire the lock, observe the existing entry, and
+	// commit to c.wg.Wait(). Once all followers are parked on the leader's WaitGroup,
+	// it is safe to release the gate; subsequent callers cannot start a new fn().
+	for {
+		r.recovery.sf.mu.Lock()
+		_, leaderInflight := r.recovery.sf.inflight[queryID]
+		r.recovery.sf.mu.Unlock()
+		if leaderInflight && hist.calls.Load() >= 1 {
+			break
+		}
+		runtime.Gosched()
+	}
+	// Give followers a generous window to enter c.wg.Wait().
+	for i := 0; i < 10_000; i++ {
+		runtime.Gosched()
+	}
+
+	close(hist.gate)
+	doneWG.Wait()
+
+	assert.Equal(t, int32(1), hist.calls.Load(), "history lookup must be singleflight-coalesced to exactly 1 call")
+	for i := 0; i < concurrency; i++ {
+		require.NoError(t, errs[i], "goroutine %d", i)
+		assert.Equal(t, "http://trino-history:8080", results[i], "goroutine %d", i)
+	}
+}
+
+// failingClient is an http.Client.Transport that fails the test if invoked.
+type failingTransport struct {
+	t *testing.T
+}
+
+func (f *failingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	f.t.Errorf("unexpected external HTTP call to %s", req.URL.String())
+	return nil, fmt.Errorf("transport: forbidden in this test")
+}
+
+// TestRouter_NoExternalConfig_SkipsExternalCall verifies single-cluster mode:
+// when neither ExternalURL nor GRPCAddr is configured, no external routing call is made.
+func TestRouter_NoExternalConfig_SkipsExternalCall(t *testing.T) {
+	failClient := &http.Client{Transport: &failingTransport{t: t}}
+
+	hist := &fakeHistory{data: map[string]string{}}
+	bl := &fakeBackends{backends: []ActiveBackend{
+		{Name: "only", URL: "http://trino-only:8080", RoutingGroup: "default"},
+	}}
+
+	r, err := New(Config{
+		Routing: config.RoutingConfig{
+			DefaultGroup: "default",
+			Type:         "EXTERNAL",
+			// No External.URL and no External.GRPCAddr.
+		},
+		ExternalClient: failClient,
+		ProbeClient:    &http.Client{},
+		History:        hist,
+		Backends:       bl,
+		Log:            discardLogger(),
+	})
+	require.NoError(t, err)
+
+	req := &RouteInput{Method: "GET", RequestURI: "/v1/info", headers: make(http.Header)}
+	result, err := r.Route(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, "http://trino-only:8080", result.BackendURL,
+		"single-cluster mode must resolve via default group without external call")
+}

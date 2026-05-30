@@ -19,33 +19,42 @@ type Router interface {
 	WriteCache(queryID, backendURL string)
 }
 
+// HistoryRecorder records a routed query into persistent history.
+// Defined here (consumer owns the interface) per project conventions.
+type HistoryRecorder interface {
+	Insert(ctx context.Context, queryID, backendURL, userName, source string) error
+}
+
 // Config holds all constructor parameters for Proxy.
 type Config struct {
-	Proxy  config.ProxyConfig
-	Cookie config.CookieConfig
-	Auth   config.AuthConfig
-	Client *http.Client   // proxyClient — passed in from main; never created here
-	Router Router
-	AuthMW auth.Middleware // from auth.New(...)
-	Log    *slog.Logger
+	Proxy   config.ProxyConfig
+	Cookie  config.CookieConfig
+	Auth    config.AuthConfig
+	Client  *http.Client      // proxyClient — passed in from main; never created here
+	Router  Router
+	History HistoryRecorder   // nil-safe: skipped when not wired
+	AuthMW  auth.Middleware   // from auth.New(...)
+	Log     *slog.Logger
 }
 
 // Proxy implements http.Handler and routes inbound Trino traffic to selected backends.
 type Proxy struct {
-	cfg    Config
-	router Router
-	client *http.Client
-	log    *slog.Logger
-	mux    http.Handler
+	cfg     Config
+	router  Router
+	history HistoryRecorder
+	client  *http.Client
+	log     *slog.Logger
+	mux     http.Handler
 }
 
 // New constructs a Proxy and wires up chi routes.
 func New(cfg Config) *Proxy {
 	p := &Proxy{
-		cfg:    cfg,
-		router: cfg.Router,
-		client: cfg.Client,
-		log:    cfg.Log,
+		cfg:     cfg,
+		router:  cfg.Router,
+		history: cfg.History,
+		client:  cfg.Client,
+		log:     cfg.Log,
 	}
 	p.mux = p.setupRoutes()
 	return p

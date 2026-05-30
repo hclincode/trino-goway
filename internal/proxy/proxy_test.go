@@ -525,3 +525,95 @@ func TestInjectHeaders_XForwarded(t *testing.T) {
 func buildUpstreamRequestFromProxy(p *Proxy, r *http.Request, result *routing.RouteResult) (*http.Request, error) {
 	return p.buildUpstreamRequest(r.Context(), result.BackendURL, r, bytes.NewReader(nil)), nil
 }
+
+// --- History recording on POST /v1/statement ---
+
+// fakeHistory records every Insert call for assertion.
+type fakeHistory struct {
+	mu      sync.Mutex
+	records []historyCall
+	err     error
+}
+
+type historyCall struct {
+	QueryID, BackendURL, UserName, Source string
+}
+
+func (f *fakeHistory) Insert(_ context.Context, queryID, backendURL, userName, source string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.records = append(f.records, historyCall{queryID, backendURL, userName, source})
+	return f.err
+}
+
+func (f *fakeHistory) Calls() []historyCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]historyCall, len(f.records))
+	copy(out, f.records)
+	return out
+}
+
+// TestProxy_HistoryRecord_OnSuccessfulStatement verifies the proxy records the
+// routed query into history after a successful POST /v1/statement that yielded
+// a queryId. Covers the HistoryRecorder wiring added in handleStatement.
+func TestProxy_HistoryRecord_OnSuccessfulStatement(t *testing.T) {
+	t.Parallel()
+
+	const queryID = "20240101_000000_00042_xxxxx"
+	upstreamBody := `{"id":"` + queryID + `","nextUri":"http://trino/v1/statement/executing/` + queryID + `/1"}`
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, upstreamBody)
+	}))
+	defer upstream.Close()
+
+	router := &fakeRouter{backendURL: upstream.URL}
+	history := &fakeHistory{}
+
+	p := New(Config{
+		Proxy:   config.ProxyConfig{ResponseSize: config.DataSize{Bytes: 1_048_576}},
+		Cookie:  config.CookieConfig{WireCompat: true},
+		Client:  upstream.Client(),
+		Router:  router,
+		History: history,
+		Log:     discardLogger(),
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/statement", strings.NewReader("SELECT 1"))
+	req.Header.Set("X-Trino-User", "alice")
+	req.Header.Set("X-Trino-Source", "test-client")
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	calls := history.Calls()
+	require.Len(t, calls, 1, "history.Insert must be called exactly once for a successful POST /v1/statement")
+	assert.Equal(t, queryID, calls[0].QueryID)
+	assert.Equal(t, upstream.URL, calls[0].BackendURL)
+	assert.Equal(t, "alice", calls[0].UserName)
+	assert.Equal(t, "test-client", calls[0].Source)
+}
+
+// TestProxy_HistoryRecord_NilHistoryDoesNotPanic verifies the proxy operates
+// normally when the History config field is nil (e.g. when the gateway runs
+// without persistence).
+func TestProxy_HistoryRecord_NilHistoryDoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	upstreamBody := `{"id":"20240101_000000_99999_xxxxx","nextUri":"http://trino/q/1"}`
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, upstreamBody)
+	}))
+	defer upstream.Close()
+
+	router := &fakeRouter{backendURL: upstream.URL}
+	p := buildProxy(t, router, upstream.Client()) // buildProxy passes no History (nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/statement", strings.NewReader("SELECT 1"))
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}

@@ -164,6 +164,13 @@ curl http://localhost:8090/trino-gateway/livez   # always 200
 curl http://localhost:8090/trino-gateway/readyz  # 200 after first monitor tick
 ```
 
+> **Required Trino coordinator setting:** each Trino cluster behind the gateway must have
+> `http-server.process-forwarded=true` in its `config.properties`. Without it the coordinator
+> builds `nextUri` from its own bind address instead of the gateway's `X-Forwarded-*` headers,
+> and all follow-up polls bypass the gateway — sticky routing silently breaks for every query.
+> There is no error returned; queries simply stop routing through the gateway after the first
+> response.
+
 ---
 
 ## Development tools

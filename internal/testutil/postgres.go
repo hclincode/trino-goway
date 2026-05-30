@@ -1,4 +1,4 @@
-//go:build integration
+//go:build integration || e2e
 
 package testutil
 
@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
@@ -17,6 +18,22 @@ import (
 // Calls t.Cleanup to terminate the container and close the DB.
 // Uses a randomized port assigned by testcontainers-go via MappedPort.
 func PostgresContainer(t testing.TB) *sqlx.DB {
+	t.Helper()
+	db, _ := postgresContainer(t, true)
+	return db
+}
+
+// PostgresContainerDSN starts a Postgres testcontainer and returns the DSN string.
+// The container is registered for cleanup via t.Cleanup. Unlike PostgresContainer,
+// no *sqlx.DB is opened — callers that just need to hand a DSN to a subprocess
+// (e.g. the E2E binary harness) avoid an unused connection.
+func PostgresContainerDSN(t testing.TB) string {
+	t.Helper()
+	_, dsn := postgresContainer(t, false)
+	return dsn
+}
+
+func postgresContainer(t testing.TB, openDB bool) (*sqlx.DB, string) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -30,7 +47,15 @@ func PostgresContainer(t testing.TB) *sqlx.DB {
 				"POSTGRES_PASSWORD": "testpass",
 				"POSTGRES_DB":       "testdb",
 			},
-			WaitingFor: wait.ForLog("database system is ready to accept connections"),
+			// Postgres logs "database system is ready to accept connections" twice
+			// during startup — once on internal init, again after the TCP listener
+			// binds. Requiring two occurrences avoids handing back a DSN before the
+			// listener accepts external connections (otherwise subprocesses hit
+			// "connect: EOF" intermittently on first dial).
+			WaitingFor: wait.ForAll(
+				wait.ForLog("database system is ready to accept connections").WithOccurrence(2),
+				wait.ForListeningPort("5432/tcp").WithStartupTimeout(60*time.Second),
+			),
 		},
 		Started: true,
 	}
@@ -55,6 +80,15 @@ func PostgresContainer(t testing.TB) *sqlx.DB {
 	dsn := fmt.Sprintf("host=%s port=%s user=testuser password=testpass dbname=testdb sslmode=disable",
 		host, port.Port())
 
+	if !openDB {
+		t.Cleanup(func() {
+			if err := container.Terminate(context.Background()); err != nil {
+				t.Errorf("testutil: PostgresContainer cleanup: terminate container: %v", err)
+			}
+		})
+		return nil, dsn
+	}
+
 	db, err := sqlx.Open("postgres", dsn)
 	if err != nil {
 		_ = container.Terminate(ctx)
@@ -76,5 +110,5 @@ func PostgresContainer(t testing.TB) *sqlx.DB {
 		}
 	})
 
-	return db
+	return db, dsn
 }

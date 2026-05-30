@@ -31,6 +31,11 @@ func (p *Proxy) handleStatement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if p.cfg.Proxy.PropagateErrors && len(result.Errors) > 0 {
+		http.Error(w, result.Errors[0], http.StatusBadRequest)
+		return
+	}
+
 	upReq := p.buildUpstreamRequest(r.Context(), result.BackendURL, r, bytes.NewReader(reqBody))
 	p.injectHeaders(upReq, r, result)
 
@@ -61,6 +66,13 @@ func (p *Proxy) handleStatement(w http.ResponseWriter, r *http.Request) {
 	// Hard Invariant #3: write cache before writing response body to client.
 	if queryID := extractQueryIDFromBody(buf); queryID != "" {
 		p.router.WriteCache(queryID, result.BackendURL)
+		if p.history != nil {
+			userName := r.Header.Get("X-Trino-User")
+			source := r.Header.Get("X-Trino-Source")
+			if err := p.history.Insert(r.Context(), queryID, result.BackendURL, userName, source); err != nil {
+				p.log.Warn("proxy: forward: record history", "err", err, "queryId", queryID)
+			}
+		}
 	}
 
 	copyHeaders(w.Header(), upResp.Header)

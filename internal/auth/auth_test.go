@@ -2,14 +2,19 @@ package auth
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/hclincode/trino-goway/internal/config"
+	"github.com/hclincode/trino-goway/internal/testutil"
 )
 
 // TestNoop_AttachesAnonymousPrincipal verifies the noop middleware always attaches a Principal.
@@ -152,6 +157,82 @@ func TestBearerToken(t *testing.T) {
 		got := bearerToken(req)
 		assert.Equal(t, tc.want, got)
 	}
+}
+
+// quietLogger returns a slog.Logger that discards all output, for tests that
+// intentionally trigger error/warn logging.
+func quietLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// TestOIDC_UnreachableJWKS_FailsFast verifies that NewOIDC returns a non-nil error
+// when the configured jwksUrl cannot be reached, instead of silently returning a
+// middleware with no usable keys.
+func TestOIDC_UnreachableJWKS_FailsFast(t *testing.T) {
+	cfg := config.OIDCConfig{
+		// localhost:1 is reserved and refuses TCP connections, guaranteeing a fast
+		// "connection refused" error.
+		JWKSURL:     "http://127.0.0.1:1/jwks.json",
+		JWKSTTLSecs: 300,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	m, err := NewOIDC(ctx, cfg, quietLogger())
+	if m != nil {
+		// Defensive: stop the refresher to keep the test goroutine-clean.
+		m.Stop()
+	}
+	require.Error(t, err, "NewOIDC must return an error when JWKS is unreachable")
+}
+
+// TestOIDC_JWKSRefreshFailure_KeepsOldKey verifies that a failing JWKS refresh
+// does not overwrite the previously-loaded keyfunc — tokens signed with the
+// original key continue to validate after a refresh error.
+func TestOIDC_JWKSRefreshFailure_KeepsOldKey(t *testing.T) {
+	oidcSrv := testutil.NewOIDCServer(t)
+	token := oidcSrv.IssueToken("alice", []string{"cn=users"}, 1*time.Hour)
+
+	cfg := config.OIDCConfig{
+		JWKSURL:     oidcSrv.JWKSURL(),
+		JWKSTTLSecs: 300, // long; we drive refresh manually
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m, err := NewOIDC(ctx, cfg, quietLogger())
+	require.NoError(t, err)
+	defer m.Stop()
+
+	// Sanity: validate the token using the initially-loaded JWKS.
+	validate := func() error {
+		kfp := m.jwks.Load()
+		require.NotNil(t, kfp)
+		kf := *kfp
+		_, err := jwt.Parse(token, kf.Keyfunc)
+		return err
+	}
+	require.NoError(t, validate(), "token must validate against initial JWKS")
+
+	// Snapshot the current keyfunc pointer; after a failed refresh it must still
+	// be the same pointer (i.e. not overwritten).
+	original := m.jwks.Load()
+	require.NotNil(t, original)
+
+	// Make the JWKS endpoint unreachable by pointing the config at a refused port,
+	// then trigger a refresh manually. The refresh must return an error AND must
+	// not replace the stored keyfunc.
+	m.cfg.JWKSURL = "http://127.0.0.1:1/jwks.json"
+	refreshErr := m.refresh(ctx)
+	require.Error(t, refreshErr, "refresh against unreachable JWKS must return an error")
+
+	after := m.jwks.Load()
+	assert.Same(t, original, after, "keyfunc pointer must be unchanged after failed refresh")
+
+	// Final check: the original token still validates after the failed refresh.
+	require.NoError(t, validate(), "token must still validate after a failed refresh")
 }
 
 // TestGroupsClaim extracts groups from JWT claims in various formats.

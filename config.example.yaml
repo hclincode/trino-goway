@@ -6,6 +6,19 @@
 # Size strings accept: B, KB, KiB, MB, MiB, GB, GiB.
 
 # ---------------------------------------------------------------------------
+# IMPORTANT: required Trino coordinator setting
+# ---------------------------------------------------------------------------
+# Each Trino cluster behind this gateway must have the following line in its
+# config.properties:
+#
+#   http-server.process-forwarded=true
+#
+# Without it the coordinator builds nextUri from its own bind address instead
+# of the gateway's X-Forwarded-* headers. Follow-up polls then bypass the
+# gateway entirely; sticky routing breaks silently with no error returned.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
 # proxy — the main Trino-protocol listener
 # ---------------------------------------------------------------------------
 proxy:

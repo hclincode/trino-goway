@@ -57,8 +57,8 @@ Critical path: **17 → 18 → 19 → 20 → 24**. Tasks 21, 22, 23, 25 off crit
 - [x] `migrations/00002_create_query_history.sql` — `query_history` table (query_id, backend_url, user_name, source, created_at)
 - [x] `internal/persistence/backend.go` — `BackendDAO`: `List`, `Upsert`, `Delete`, `SetActive`
 - [x] `internal/persistence/history.go` — `HistoryDAO`: `Insert`, `LookupByQueryID`
-- [ ] `internal/persistence/backend_test.go` — integration tests (testcontainers Postgres + MySQL)
-- [ ] `internal/persistence/history_test.go` — integration tests
+- [x] `internal/persistence/backend_test.go` — integration tests (testcontainers Postgres + MySQL)
+- [x] `internal/persistence/history_test.go` — integration tests
 - [x] `go vet ./...` + `golangci-lint run ./...` pass
 
 ### Task 19 — `internal/routing` ✅
@@ -116,58 +116,45 @@ Critical path: **17 → 18 → 19 → 20 → 24**. Tasks 21, 22, 23, 25 off crit
 - [x] `internal/admin/admin_test.go` — integration tests: backend CRUD, health probes, role enforcement
 - [x] `go vet ./...` + `golangci-lint run ./...` pass
 
-### Task 24 — `cmd/trino-goway`
+### Task 24 — `cmd/trino-goway` ✅
 
-- [ ] `cmd/trino-goway/main.go` — three `*http.Client` instances (`proxyClient`, `monitorClient`, `routerClient`) with correct `CheckRedirect` config
-- [ ] `cmd/trino-goway/main.go` — full composition root wiring (Tasks 17–23 constructors in dependency order)
-- [ ] `cmd/trino-goway/main.go` — `//go:embed` web UI static bundle
-- [ ] `cmd/trino-goway/main.go` — SIGTERM/SIGINT → graceful `Stop(ctx)` with 30s deadline
-- [ ] `cmd/trino-goway/main.go` — startup log: config path, proxy port, admin port, `wireCompat` mode
-- [ ] `go build ./cmd/trino-goway` produces a static binary
-- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+- [x] `cmd/trino-goway/main.go` — three `*http.Client` instances (`proxyClient`, `monitorClient`, `routerClient`) with correct `CheckRedirect` config
+- [x] `cmd/trino-goway/main.go` — full composition root wiring (Tasks 17–23 constructors in dependency order)
+- [x] `cmd/trino-goway/main.go` — `//go:embed` web UI static bundle
+- [x] `cmd/trino-goway/main.go` — SIGTERM/SIGINT → graceful `Stop(ctx)` with 30s deadline
+- [x] `cmd/trino-goway/main.go` — startup log: config path, proxy port, admin port, `wireCompat` mode
+- [x] `go build ./cmd/trino-goway` produces a static binary
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
 
-### Task 25 — `cmd/goway-migrate-config`
+### Task 25 — `cmd/goway-migrate-config` ✅
 
-- [ ] `cmd/goway-migrate-config/main.go` — CLI: `--input` Java YAML path, `--output` Go YAML path
-- [ ] `cmd/goway-migrate-config/migrate.go` — Java → Go field mapping for all config keys
-- [ ] `cmd/goway-migrate-config/testdata/` — Java YAML fixture + expected Go YAML fixture
-- [ ] `cmd/goway-migrate-config/migrate_test.go` — roundtrip tests with golden files
-- [ ] `go build ./cmd/goway-migrate-config` passes
-- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+- [x] `cmd/goway-migrate-config/main.go` — CLI: `--input` Java YAML path, `--output` Go YAML path
+- [x] `cmd/goway-migrate-config/migrate.go` — Java → Go field mapping for all config keys
+- [x] `cmd/goway-migrate-config/testdata/` — Java YAML fixture + expected Go YAML fixture
+- [x] `cmd/goway-migrate-config/migrate_test.go` — roundtrip tests with golden files
+- [x] `go build ./cmd/goway-migrate-config` passes
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
 
-### Task 29 — `cmd/mock-external-router` (HTTP mock)
+### Task 29 — `cmd/mock-external-router` (HTTP mock) ✅
 
-Stand-alone HTTP server that acts as a drop-in external routing endpoint for local
-development and manual testing. Lets operators point `routing.external.url` at
-`http://localhost:<port>` and watch exactly what the gateway sends.
+- [x] `cmd/mock-external-router/main.go` — `--port` flag (default 9000), `--group` flag (default `"default"`)
+- [x] Handle `POST /route` (and any other path, so it works regardless of the configured URL suffix)
+- [x] Pretty-print each incoming request body as indented JSON to stdout, prefixed with a timestamp
+- [x] Always respond `200 OK` with `Content-Type: application/json` body
+- [x] On bad JSON body: still print raw bytes, still return the default group (never 4xx)
+- [x] `cmd/mock-external-router/main_test.go` — table-driven tests
+- [x] `go build ./cmd/mock-external-router` produces a static binary
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
 
-- [ ] `cmd/mock-external-router/main.go` — `--port` flag (default 9000), `--group` flag (default `"default"`)
-- [ ] Handle `POST /route` (and any other path, so it works regardless of the configured URL suffix)
-- [ ] Pretty-print each incoming request body as indented JSON to stdout, prefixed with a timestamp
-- [ ] Always respond `200 OK` with `Content-Type: application/json` body:
-  ```json
-  {"routingGroup": "<group>", "errors": [], "externalHeaders": {}}
-  ```
-  where `<group>` comes from `--group`.
-- [ ] On bad JSON body: still print raw bytes, still return the default group (never 4xx — mirrors Java's lenient behaviour)
-- [ ] `cmd/mock-external-router/main_test.go` — table-driven: valid JSON body pretty-printed + correct response; non-JSON body doesn't 4xx; `--group` flag wires through to response; any path is handled
-- [ ] `go build ./cmd/mock-external-router` produces a static binary
-- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+### Task 30 — `cmd/mock-external-router-grpc` (gRPC mock) ✅
 
-### Task 30 — `cmd/mock-external-router-grpc` (gRPC mock) **[blocked by Task 29]**
-
-gRPC counterpart to Task 29. Implements the `TrinoGatewayRouter` service defined in
-`internal/routing/routerpb/router.proto` and behaves identically: print every
-`RouteRequest`, return a fixed `RouteResponse`.
-
-- [ ] `cmd/mock-external-router-grpc/main.go` — `--addr` flag (default `:9001`), `--group` flag (default `"default"`)
-- [ ] Implement `TrinoGatewayRouter.Route`: marshal `RouteRequest` to indented JSON via `protojson`, print to stdout with timestamp
-- [ ] Return `RouteResponse{RoutingGroup: <group>, Errors: [], ExternalHeaders: {}}` always
-- [ ] Use `google.golang.org/grpc` + `google.golang.org/protobuf/encoding/protojson` (both already in `go.mod`)
-- [ ] Register a gRPC reflection service so `grpcurl` can introspect without the `.proto`
-- [ ] `cmd/mock-external-router-grpc/main_test.go` — dial the server in-process (`bufconn`): verify `Route` returns the configured group; verify `RouteRequest` fields are printed to a captured writer; verify reflection service is registered
-- [ ] `go build ./cmd/mock-external-router-grpc` produces a static binary
-- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+- [x] `cmd/mock-external-router-grpc/main.go` — `--addr` flag (default `:9001`), `--group` flag (default `"default"`)
+- [x] Implement `TrinoGatewayRouter.Route`: marshal `RouteRequest` to indented JSON via `protojson`, print to stdout with timestamp
+- [x] Return `RouteResponse{RoutingGroup: <group>, Errors: [], ExternalHeaders: {}}` always
+- [x] Register a gRPC reflection service so `grpcurl` can introspect without the `.proto`
+- [x] `cmd/mock-external-router-grpc/main_test.go` — dial the server in-process (`bufconn`)
+- [x] `go build ./cmd/mock-external-router-grpc` produces a static binary
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
 
 ## Backlog
 
@@ -187,3 +174,291 @@ gRPC counterpart to Task 29. Implements the `TrinoGatewayRouter` service defined
   - [x] **Phase 2** — Java gateway container bootstrap (`internal/diffharness/bootstrap.go`, `trinodb/trino-gateway:19` + Postgres + shared Trino via `testcontainers-go/network`, embedded config template at `internal/diffharness/testdata/java-gateway-config.yaml.tmpl`). `record`/`replay`/`report` subcommands wired with `Golden` on-disk format under `cmd/goway-diff-harness/testdata/golden/`. `cmd/goway-diff-harness/live_test.go` under `//go:build diff` boots the fleet + in-process Go gateway and asserts all committed scenarios PASS. Library coverage 85.2%.
   - [x] **Phase 3 scenarios** — committed 8 new YAML scenarios under `cmd/goway-diff-harness/testdata/scenarios/`: seam2-redirect-not-followed, seam3-cache-write-before-flush, seam4-router-result-handling, seam5-async-timeout, seam6-killquery-routing, seam7-cookie-emission, seam8-upstream-error, statement-protocol-roundtrip. Every diff.ignore* entry carries a `[JUSTIFIED]` comment per the normalizer-minimal discipline; enforced by `internal/diffharness/scenarios_validation_test.go::TestCommittedScenarios_LoadAndJustified`. CLI smoke tests scoped to seam1 only (the smoke fake is intentionally minimal — Phase-3 scenarios are validated end-to-end by the `//go:build diff` `live_test.go` against the real fleet). `go test -race` clean on both packages.
   - [ ] **Phase 3 remaining** — CI guidance for the `diff` build tag; qa-tech-lead normalizer sign-off; first nightly `live_test.go` execution to bake in any timing surprises and commit the resulting golden files.
+
+### Phase 6: Team Review
+
+Each review task produces a document in `studies/`. Review tasks read the trino-goway implementation and cross-reference it against Phase 1–3 study findings. No code is written. All four tasks can run in parallel.
+
+- [x] Task 31 — **trino-expert behavioral audit** (`studies/trino-gateway/behavioral-audit.trino-expert.md`)
+  - Cross-reference the actual `internal/proxy/` and `internal/routing/` implementation against behavioral contracts documented in `studies/trino-gateway/architectural-intent.trino-expert.md` and `studies/both/protocol-constraints-on-the-gateway.architect.md`
+  - Flag any behavioral edge cases where trino-goway diverges from Java trino-gateway: header handling quirks, `nextUri` host construction, body passthrough, hop-by-hop stripping
+  - Document intentional divergences (bugs fixed in Go) vs accidental gaps
+  - Enumerate each behavior as: IMPLEMENTED / GAP / INTENTIONAL-DIVERGENCE, with evidence (file:line)
+  - Flag which gaps are blockers for Phase 8 E2E tests vs acceptable in v1
+
+- [x] Task 32 — **java-analyst admin API completeness audit** (`studies/trino-gateway/admin-api-completeness-gap.java-analyst.md`)
+  - Cross-reference every endpoint in `studies/trino-gateway/admin-api-surface.java-analyst.md` against `internal/admin/` implementation
+  - For each endpoint: COMPLETE (response shape matches Java wire format) / PARTIAL (exists but shape differs) / MISSING
+  - Verify wire JSON shapes for `ProxyBackend`, `QueryDetail`, `TableData<T>`, and the `{code, msg, data}` webapp envelope match Java exactly
+  - Identify any `@RolesAllowed` role mismatches between Java and Go
+  - Output table feeds directly into Task 47 (admin E2E) and Task 48 (webapp E2E) as the authoritative checklist
+
+- [x] Task 33 — **go-qa proxy seam gap analysis** (`studies/both/proxy-seam-gap-analysis.go-qa.md`)
+  - Map all 12 hard invariants from `USE_STORIES.md § Hard Invariants` to existing tests in `internal/proxy/proxy_test.go`, `internal/e2e/proxy_e2e_test.go`, and `cmd/goway-diff-harness/testdata/scenarios/`
+  - For each invariant: COVERED (cite test name) / PARTIALLY-COVERED (explain gap) / NOT-COVERED
+  - Identify which invariants (#4 bounded buffering, #7 hop-by-hop, #8 X-Forwarded-For append, #9 externalHeaders REPLACE, #11 readyz timing, #12 three clients) have no black-box E2E test
+  - Output feeds into Task 54 (hard invariants E2E) as the test specification
+
+- [x] Task 34 — **qa-tech-lead E2E coverage gap document** (`studies/both/e2e-coverage-plan.qa-tech-lead.md`)
+  - Map every acceptance criterion in `USE_STORIES.md` §1–§7 to: COVERED-BY-EXISTING-TEST (cite) / PLANNED-IN-TASK-N / NOT-COVERED
+  - Identify acceptance criteria not verifiable via black-box (binary + HTTP) and propose white-box fallbacks
+  - Confirm build-tag strategy (`//go:build e2e`) and CI integration points for Phase 8 tests
+  - Sign-off document: Phase 8 may not begin until this document is committed
+
+### Phase 7: E2E Test Infrastructure
+
+Tasks 35–37 can start immediately (no Task 24 dependency). Task 38 is blocked by Task 24.
+
+#### Task 35 — Extended fake Trino backend
+
+Extends `internal/testutil/` with a Trino-protocol-aware fake that fully handles sticky-routing sequences, HEAD probe fan-out, and KILL QUERY detection. Needed by Phase 8 tests that cannot use a real Trino container.
+
+- [x] `internal/testutil/trino_fake.go` — `TrinoFake` struct wrapping `httptest.Server`
+  - `NewTrinoFake(t) *TrinoFake` — creates the server; registers `t.Cleanup(server.Close)`
+  - `POST /v1/statement`: generate a valid queryId string (`<timestamp>_<seq>_<rand>_trino`); build `nextUri` using the inbound `Host` header (so `X-Forwarded-Host` rewrites propagate correctly); return Trino JSON `{id, nextUri, infoUri, stats:{state:"QUEUED"}}`; record `(queryId, requestBody, requestHeaders)`
+  - `GET /v1/query/<queryId>` and any trailing path: return `{id, stats:{state:"FINISHED"}}` on first hit; record a hit per queryId
+  - `HEAD /v1/query/<queryId>`: return `200 OK` if queryId was seen in a prior POST; `404` otherwise; record the HEAD probe
+  - `DELETE /v1/query/<queryId>`: record the cancellation; return `200 OK`
+  - `GET /v1/info`: return `{"starting":false}` by default; configurable via `SetStarting(bool)` to simulate not-yet-ready backends
+  - Exported assertion helpers: `QueryIDs() []string`, `HitCount(queryId string) int`, `HeadProbes(queryId string) int`, `Cancellations() []string`, `ReceivedHeaders(queryId string) http.Header`
+- [x] `internal/testutil/trino_fake_test.go` — table-driven tests for all handler paths; verify queryId format, nextUri construction, HEAD probe semantics
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
+
+#### Task 36 — Mock OIDC server
+
+Minimal in-process OIDC server for OIDC auth E2E tests (Task 51). Serves a JWKS endpoint and issues RS256 JWTs with configurable claims.
+
+- [x] `internal/testutil/oidc_server.go` — `OIDCServer` struct wrapping `httptest.TLSServer` (TLS required — OIDC JWKS URLs must be HTTPS in production-like configs)
+  - `NewOIDCServer(t) *OIDCServer` — generates an RSA-2048 key pair in-process; starts TLS server; registers `t.Cleanup`
+  - `GET /.well-known/jwks.json` — returns a single JWK entry for the signing key in standard JWKS JSON format
+  - `IssueToken(sub string, groups []string, ttl time.Duration) string` — signs an RS256 JWT with `sub`, `groups` (array claim), `memberOf` (comma-joined string claim), `iss`, `exp`; returns the raw token string
+  - `JWKSURL() string` — returns the HTTPS URL of the JWKS endpoint (for use in gateway config)
+  - `RotateKey()` — generates a new RSA key pair and updates the JWKS response; old tokens become invalid after the gateway refreshes its keyfunc
+- [x] `internal/testutil/oidc_server_test.go` — verify issued tokens validate against the JWKS; verify key rotation causes old tokens to reject; verify TLS cert is trusted by the test client
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
+
+#### Task 37 — Mock LDAP server
+
+Minimal in-process LDAP server for LDAP auth E2E tests (Task 52). Supports bind auth and `memberOf` attribute lookup.
+
+- [x] `internal/testutil/ldap_server.go` — `LDAPServer` struct
+  - Use `github.com/glauth/glauth/v2` embedded or `github.com/nmcclain/ldap` in-process server; seed with configurable user entries: `{DN string, Password string, MemberOf []string}`
+  - `NewLDAPServer(t, users []LDAPUser) *LDAPServer` — starts in-process LDAP; binds on a free port; registers `t.Cleanup`
+  - `Addr() string` — returns `host:port` for use in gateway config (`auth.ldap.url: ldap://<addr>`)
+  - `BindDN() string`, `BindPassword() string` — returns the service-account credentials seeded at construction
+  - `UserBase() string` — returns the base DN for user search
+- [x] `internal/testutil/ldap_server_test.go` — verify bind succeeds for known users, fails for bad password, returns memberOf correctly
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
+
+#### Task 38 — Full-stack E2E binary harness **[blocked by Task 24]**
+
+Launches `trino-goway` as a subprocess (not in-process), wires Postgres via testcontainers, registers `TrinoFake` backends, waits for `/trino-gateway/readyz`, and exposes typed clients for proxy and admin ports. This is the canonical black-box harness for all Phase 8 tests.
+
+- [x] `internal/e2e/harness/harness.go` — `Harness` struct
+  - `New(t *testing.T, opts ...HarnessOption) *Harness` — starts Postgres container (testcontainers), runs `goose up`, writes a temp config YAML, execs `trino-goway --config <path>`, polls `/trino-gateway/readyz` (30 s deadline → `t.Fatal`); registers `t.Cleanup` (SIGTERM subprocess → wait 5 s → SIGKILL if needed → terminate containers)
+  - `HarnessOption` functional options: `WithExternalHTTPRouter(url)`, `WithExternalGRPCRouter(addr)`, `WithAuth(authCfg)`, `WithCookieSecret(secret)`, `WithResponseSize(bytes)`, `WithMonitorInterval(d)` — each writes the relevant config section into the temp YAML
+  - `ProxyURL() string` — `http://localhost:<proxyPort>`
+  - `AdminURL() string` — `http://localhost:<adminPort>`
+  - `ProxyClient() *http.Client` — `CheckRedirect: ErrUseLastResponse`; no auth
+  - `AdminClient(bearerToken string) *http.Client` — injects `Authorization: Bearer <token>` on every request (bearer-token param is `""` for NOOP auth)
+  - `AddBackend(t, name, group string) *testutil.TrinoFake` — starts a `TrinoFake`; calls `POST /entity?entityType=GATEWAY_BACKEND` on the admin port; polls until `GET /gateway/backend/all` shows the backend `HEALTHY` (15 s deadline)
+  - `BinaryPath()` — resolved at startup from env `TRINO_GOWAY_BIN` or `./trino-goway` in the same directory as the test binary
+- [x] `internal/e2e/harness/harness_test.go` (`//go:build e2e`) — smoke test: harness starts; proxy returns non-error response to a minimal request; `/trino-gateway/readyz` returns 200; cleanup exits cleanly; `goleak.VerifyTestMain`
+- [x] `//go:build e2e` on all harness files
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
+
+### Phase 8: E2E Tests (black-box via HTTP interface)
+
+All Phase 8 tests carry `//go:build e2e`, are in `internal/e2e/`, use the `Harness` from Task 38, and treat `trino-goway` as a black box. All tests are blocked by Task 38. Tasks 51–52 additionally require Tasks 36–37.
+
+#### Task 39 — E2E: Trino proxy protocol (USE_STORIES §1.1, §1.2, §1.6)
+
+- [x] `internal/e2e/proxy_protocol_e2e_test.go`
+- [x] `TestE2E_PostStatement_RoutesToBackend` — `POST /v1/statement` forwarded to registered backend; gateway returns 200 with valid Trino JSON `{id, nextUri}`; request body reaches backend verbatim (Hard Invariant #1)
+- [x] `TestE2E_PostStatement_StickyRouting` — after first `POST /v1/statement`, subsequent `GET /v1/query/<queryId>` requests land on the same backend (`TrinoFake.HitCount` asserted) not any other backend
+- [x] `TestE2E_PostStatement_ResponseBufferingCap` — backend returns body larger than `proxy.responseSize` → gateway returns `502 Bad Gateway` with body `upstream response too large`
+- [x] `TestE2E_PostStatement_NoBackendAvailable` — no active backends registered → gateway returns `502 Bad Gateway` with body `no backend available`
+- [x] `TestE2E_StreamingPath_NotBuffered` — `GET /v1/query/<id>` with a large backend response passes through intact; no 502; response body bytes match backend bytes (Hard Invariant #4)
+- [x] `TestE2E_ForwardedHeaders_XForwardedHost` — backend receives `X-Forwarded-Host` matching the client's `Host` header (§1.6)
+- [x] `TestE2E_ForwardedHeaders_XForwardedForAppends` — send request with existing `X-Forwarded-For: 1.2.3.4`; backend sees `1.2.3.4, <clientIP>` (Hard Invariant #8)
+- [x] `TestE2E_HopByHopStripped` — request carrying `Connection: keep-alive` and `Transfer-Encoding: chunked`; backend does NOT receive those headers (Hard Invariant #7) — split into `_RequestDirection` and `_ResponseDirection` per go-qa gap analysis (both client→upstream and upstream→client must be covered)
+- [x] `go vet -tags=e2e ./internal/e2e/...` passes
+
+#### Task 40 — E2E: KILL QUERY routing (USE_STORIES §1.3, Hard Invariant #6)
+
+- [x] `internal/e2e/kill_query_e2e_test.go`
+- [x] `TestE2E_KillQuery_RoutesToOwnerBackend` — run a query on backend-A (records to query history); send `POST /v1/statement` with body `KILL QUERY '<queryId>'` while backend-B is the routing-group selection → request lands on backend-A, NOT backend-B; assert via `TrinoFake.HitCount`
+- [x] `TestE2E_KillQuery_Lowercase` — `kill query` (lowercase) triggers the same routing behavior
+- [x] `TestE2E_KillQuery_UnknownId` — queryId not in history → falls through to normal routing without error; no 502
+- [x] `go vet -tags=e2e ./internal/e2e/...` passes
+
+#### Task 41 — E2E: 3-step cache-miss recovery chain (USE_STORIES §1.4)
+
+- [x] `internal/e2e/recovery_chain_e2e_test.go`
+- [x] `TestE2E_Recovery_HistoryLookup` — submit a query (writes cache/history); subsequent `GET /v1/query/<queryId>` routed to original backend
+- [x] `TestE2E_Recovery_HEADProbeFanout` — queryId unknown to cache AND history; backends placed in non-default groups so recovery chain fires; both fakes record a HEAD probe; falls back to first-active when all probes 404
+- [x] `TestE2E_Recovery_FirstActiveFallback` — queryId unknown everywhere; first active backend selected; no 404 returned to client
+- [x] `TestE2E_StatementPolls_BypassCache` (qa-tech-lead §1.2c) — `/v1/statement/<id>/executing/...` polls are forwarded by handleStream, not gated on cache hit
+- [x] `go vet -tags=e2e ./internal/e2e/...` passes
+
+#### Task 42 — E2E: External HTTP routing (USE_STORIES §2.1, HTTP transport) ✅
+
+- [x] `internal/e2e/external_http_routing_e2e_test.go`
+- [x] Uses inline `httptest.Server` replicating the `cmd/mock-external-router` contract
+- [x] `TestE2E_ExternalHTTP_RoutingGroupUsed` — router returns `{"routingGroup":"etl"}`; backend in group `etl` receives request; backend in group `default` does not
+- [x] `TestE2E_ExternalHTTP_ExternalHeadersReplace` — router returns `{"externalHeaders":{"X-Custom":"from-router"}}`; backend sees `X-Custom: from-router`; if client also sent `X-Custom: original`, only `from-router` value arrives (REPLACE semantics, Hard Invariant #9)
+- [x] `TestE2E_ExternalHTTP_ExcludeHeaders` — `routing.external.excludeHeaders: ["X-Secret"]`; router request does NOT contain `X-Secret` from inbound; router response `externalHeaders` with `X-Secret` NOT injected upstream
+- [x] `TestE2E_ExternalHTTP_FallbackOnRouterDown` — router URL points to a closed port; request still succeeds via `defaultGroup` fallback; no 502 to client
+- [x] `TestE2E_ExternalHTTP_PropagateErrors` — router returns `{"errors":["access denied"]}`; config `propagateErrors: true`; client gets `400 Bad Request`
+- [x] `TestE2E_ExternalHTTP_TimeoutFallback` — router endpoint delays beyond `routing.external.timeout`; request still served (fallback), no hang
+- [x] `go vet ./...` pass
+
+#### Task 43 — E2E: External gRPC routing (USE_STORIES §2.1, gRPC transport) ✅
+
+- [x] `internal/e2e/external_grpc_routing_e2e_test.go`
+- [x] In-process gRPC server bound to a real localhost TCP port (gateway subprocess reaches it over the wire)
+- [x] `TestE2E_ExternalGRPC_RoutingGroupUsed` — gRPC router returns `routingGroup=etl`; request lands on `etl` backend
+- [x] `TestE2E_ExternalGRPC_FallbackToHTTP` — gRPC addr configured but unreachable; HTTP url configured and reachable; gateway falls back to HTTP transport and succeeds
+- [x] `TestE2E_ExternalGRPC_FallbackOnBothDown` — both gRPC and HTTP unreachable; `defaultGroup` fallback serves request
+- [x] `TestE2E_ExternalGRPC_RouteRequestEquivalence` — RouteRequest method, request_uri, and trino_request_user.user populated from inbound headers
+- [x] `go vet ./...` pass
+
+#### Task 44 — E2E: Routing groups and single-cluster mode (USE_STORIES §2.2, §2.3) ✅
+
+- [x] `internal/e2e/routing_groups_e2e_test.go`
+- [x] `TestE2E_RoutingGroup_SteeringByGroup` — two backends in different groups (`adhoc`, `etl`); router returns `etl`; only `etl` backend receives requests
+- [x] `TestE2E_RoutingGroup_RecoveryWhenGroupEmpty` — router returns a group with no healthy backends; recovery chain runs; first active backend (in any group) serves request
+- [x] `TestE2E_SingleCluster_NoExternalRouter` — harness started with no `routing.external.url` or `grpcAddr`; every request routes to `defaultGroup`; no 502
+- [x] `go vet ./...` pass
+
+#### Task 45 — E2E: Backend health monitoring (USE_STORIES §3.1, §3.2) ✅
+
+- [x] `internal/e2e/health_monitoring_e2e_test.go`
+- [x] `TestE2E_Monitor_HealthyBackend` — `TrinoFake` returns `{"starting":false}` on `/v1/info`; after one monitor interval, admin API reports backend `HEALTHY`
+- [x] `TestE2E_Monitor_UnhealthyBackend` — `TrinoFake.SetStarting(true)` → `/v1/info` returns `{"starting":true}`; monitor marks backend `UNHEALTHY`; routing skips it (request falls to other backend)
+- [x] `TestE2E_Monitor_TransportError` — backend closed mid-test; `/v1/info` returns connection error; monitor marks `UNHEALTHY` within one probe interval
+- [x] `TestE2E_Monitor_NewlyAddedBackend` — `POST /entity?entityType=GATEWAY_BACKEND`; immediately `GET /webapp/getAllBackends` shows backend with status `PENDING`; after probe interval, status transitions to `HEALTHY`
+- [x] `TestE2E_Monitor_DeactivatedBackend` — `POST /gateway/backend/deactivate/{name}`; backend excluded from routing immediately (no requests reach it); status shown as `UNHEALTHY` in admin API
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
+
+#### Task 46 — E2E: Liveness and readiness probes (USE_STORIES §3.3, Hard Invariant #11) ✅
+
+- [x] `internal/e2e/probes_e2e_test.go`
+- [x] `TestE2E_Livez_AlwaysOK` — `GET /trino-gateway/livez` returns `200 ok` immediately after startup and after probe cycle
+- [x] `TestE2E_Readyz_503BeforeFirstProbe` — harness started with `WithSkipReadyzWait()` + long `monitor.interval`; `GET /trino-gateway/readyz` returns `503 not ready` before any probe fires
+- [x] `TestE2E_Readyz_200AfterFirstProbe` — harness with short monitor interval; poll `/trino-gateway/readyz` until `200` (15 s deadline); assert it transitions to 200 after first probe
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
+
+#### Task 47 — E2E: Admin CRUD API (USE_STORIES §4.1, §4.2)
+
+- [x] `internal/e2e/admin_crud_e2e_test.go`
+- [x] `TestE2E_Admin_BackendListEmpty` — `GET /gateway/backend/all` returns `[]` initially
+- [x] `TestE2E_Admin_BackendAddActivateDeactivateDelete` — full lifecycle: add via `POST /gateway/backend/modify/add`; list shows it; `POST /gateway/backend/activate/{name}`; `GET /gateway/backend/active` includes it; `POST /gateway/backend/deactivate/{name}`; active list excludes it; `POST /gateway/backend/modify/delete` (raw name body); list is empty again
+- [x] `TestE2E_Admin_BackendWireShape` — backend JSON has exactly `{name, proxyTo, externalUrl, active, routingGroup}`; no extra fields; all required fields present
+- [x] `TestE2E_Admin_EntityAPI_AddAndList` — `POST /entity?entityType=GATEWAY_BACKEND` with backend JSON → `GET /entity/GATEWAY_BACKEND` returns it
+- [x] `TestE2E_Admin_EntityAPI_ListTypes` — `GET /entity` returns `["GATEWAY_BACKEND"]`
+- [x] `TestE2E_Admin_EntityAPI_UnknownType` — `POST /entity?entityType=WIDGETS` returns `500` (mirror Java behavior)
+- [x] `TestE2E_Admin_EntityAPI_SeedsMonitorStatus` — `POST /entity` with `active:true` backend; immediate `POST /webapp/getAllBackends` shows status `PENDING` (not absent)
+- [x] `TestE2E_Admin_PublicBackends_NoAuth` — `GET /api/public/backends` returns backends without any `Authorization` header
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
+
+#### Task 48 — E2E: Webapp endpoints (USE_STORIES §4.3)
+
+- [x] `internal/e2e/webapp_e2e_test.go`
+- [x] `TestE2E_Webapp_ResponseEnvelope` — all `/webapp/*` responses have `{code:200, msg:"Successful.", data:...}` on success and `{code:500, msg:"<reason>", data:null}` on error
+- [x] `TestE2E_Webapp_GetAllBackends` — `POST /webapp/getAllBackends` returns backends with live `status` field (`"HEALTHY" | "UNHEALTHY" | "PENDING"`)
+- [x] `TestE2E_Webapp_GetDistribution` — `POST /webapp/getDistribution` returns all required fields: `totalBackendCount`, `onlineBackendCount`, `offlineBackendCount`, `healthyBackendCount`, `unhealthyBackendCount`, `totalQueryCount`, `startTime` (ISO-8601)
+- [x] `TestE2E_Webapp_GetUIConfiguration` — `POST /webapp/getUIConfiguration` returns `{authType}` matching configured auth mode
+- [x] `TestE2E_Webapp_FindQueryHistory` — `POST /webapp/findQueryHistory` returns `TableData<QueryDetail>` shape; non-ADMIN caller's `userName` filter forced to own identity server-side
+- [x] `TestE2E_Webapp_RoutingRulesStubs` — `POST /webapp/getRoutingRules` returns empty list; `POST /webapp/updateRoutingRules` returns success envelope
+- [x] `TestE2E_Webapp_RoleEnforcement` — endpoints requiring `USER` or `ADMIN` role return `403` for a principal with no roles (NOOP auth, no role regex configured)
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
+
+#### Task 49 — E2E: Query history (USE_STORIES §4.4)
+
+- [x] `internal/e2e/query_history_e2e_test.go`
+- [x] `TestE2E_History_RecordedAfterStatement` — `POST /v1/statement` with `X-Trino-User: alice`; `GET /trino-gateway/api/queryHistory` (ADMIN auth) returns record with correct `backendUrl`, `queryId`, `userName: alice`
+- [x] `TestE2E_History_AdminSeesAllUsers` — two queries by `alice` and `bob`; ADMIN caller sees both records
+- [x] `TestE2E_History_UserScopedToOwn` — `alice` calls `GET /trino-gateway/api/queryHistory`; only sees own records even when passing `?userName=bob` query param
+- [x] `TestE2E_History_Distribution` — `GET /trino-gateway/api/queryHistoryDistribution` returns `{backendUrl: count}` map with correct counts
+- [x] `TestE2E_History_ActiveBackends` — `GET /trino-gateway/api/activeBackends` returns active backends in legacy wire format
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
+
+#### Task 50 — E2E: NOOP auth and role enforcement (USE_STORIES §5.1 noop, §5.2, §4.5)
+
+- [x] `internal/e2e/auth_noop_e2e_test.go`
+- [x] `TestE2E_NOOP_ProxyPortNoAuth` — proxy port accepts requests without any `Authorization` header; Trino request forwarded normally
+- [x] `TestE2E_NOOP_AdminAnonymousPrincipal` — admin port with NOOP auth, no role regex configured; all role-protected endpoints return `403` (covered by `TestE2E_NOOP_AdminDeniedWithoutRegex`)
+- [x] `TestE2E_NOOP_RoleGrantedByRegex` — configure `auth.authorization.admin: ".*"` (matches `anonymous`); ADMIN-only endpoints return `200` (covered by `TestE2E_NOOP_AdminGrantedByRegex`)
+- [x] `TestE2E_Role_403OnInsufficientRole` — USER-role principal (matched by `auth.authorization.user` regex) calls ADMIN-only endpoint → `403 {"error":"forbidden"}`
+- [x] `TestE2E_Userinfo_ReturnsRoles` — `POST /userinfo` returns `{userId, userName, roles, permissions}` with correct role list for the authenticated principal
+- [x] `TestE2E_LoginType_ReportsNOOP` — `POST /loginType` returns auth type `none` when NOOP is configured
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
+
+#### Task 51 — E2E: OIDC auth (USE_STORIES §5.1 OIDC, §5.3) **[blocked by Tasks 36, 38]**
+
+- [x] `internal/e2e/auth_oidc_e2e_test.go`
+- [x] `TestE2E_OIDC_ValidToken_Admitted` — issue JWT via `OIDCServer.IssueToken`; send as `Authorization: Bearer <token>` on ADMIN-protected endpoint → `200`
+- [x] `TestE2E_OIDC_InvalidToken_401` — malformed token; expired token; token signed by wrong key → all return `401` with `WWW-Authenticate: Bearer`
+- [x] `TestE2E_OIDC_GroupsClaimMapsToRole` — JWT has `groups: ["platform-admin"]`; config `auth.authorization.admin: "platform-admin"`; caller gets ADMIN role; `POST /userinfo` confirms
+- [x] `TestE2E_OIDC_JWKSRefresh` — `OIDCServer.RotateKey()`; wait for `jwksTtlSecs`; token issued with old key is rejected; token with new key is accepted
+- [x] `TestE2E_OIDC_MissingJwksUrl_StartupFails` — start harness with `auth.type: OIDC` but no `jwksUrl`; subprocess exits non-zero; stderr contains config validation error
+- [x] `TestE2E_OIDC_UnreachableJWKS_StartupFails` — gap §5.3b: `auth.type: OIDC` with `jwksUrl` pointing to a refused endpoint → subprocess exits non-zero
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
+
+#### Task 52 — E2E: LDAP auth (USE_STORIES §5.1 LDAP, §5.4) **[blocked by Tasks 37, 38]**
+
+- [x] `internal/e2e/auth_ldap_e2e_test.go`
+- [x] `TestE2E_LDAP_ValidCredentials_Admitted` — HTTP Basic with known user/password → `200` on ADMIN-protected endpoint
+- [x] `TestE2E_LDAP_InvalidCredentials_401` — wrong password → `401 {"error":"..."}`
+- [x] `TestE2E_LDAP_MemberOfMapsToRole` — user DN has `memberOf: cn=platform-admin,...`; config regex matches; caller gets ADMIN role
+- [x] `TestE2E_LDAP_MissingUrl_StartupFails` — `auth.type: LDAP` without `url` → subprocess exits non-zero; config validation error in stderr
+- [x] `TestE2E_LDAP_MissingUserBase_StartupFails` — `auth.type: LDAP` with `url` but no `userBase` → subprocess exits non-zero
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
+
+#### Task 53 — E2E: Gateway cookies (USE_STORIES §1.5, Hard Invariants #5, #10) **[blocked by Tasks 36, 38]**
+
+- [x] `internal/e2e/cookie_e2e_test.go`
+- [x] `TestE2E_Cookie_IssuedOnOAuth2Path` — `cookie.secret` non-empty; first request to `/oauth2/authorize` without cookie → response contains `Set-Cookie: TG.OAUTH2=...` with `HttpOnly`, `SameSite=Lax`, `Path=/`, `Max-Age` attributes
+- [ ] `TestE2E_Cookie_StickyRouting` — second request with valid `TG.OAUTH2` cookie → routed to backend pinned by cookie, not by external router (deferred: current implementation does not yet honor cookie backend pin during routing)
+- [x] `TestE2E_Cookie_ExpiryEmitsDeleteCookie` — send request with expired `TG.OAUTH2` cookie → response contains `Set-Cookie: TG.OAUTH2=; Max-Age=0`; request is still served (not 401)
+- [x] `TestE2E_Cookie_TamperedHMAC_Returns500` — send request with `TG.OAUTH2` cookie where HMAC is corrupted → `500` (Hard Invariant #5); never silently treated as anonymous
+- [ ] `TestE2E_Cookie_LogoutPath_DeletesCookie` — request to `/logout` or `/oauth2/logout` with valid cookie → delete-cookie emitted (covered by unit `TestCookie_DeleteOnLogout` / `TestCookie_DeleteOnOAuth2Logout` in `internal/proxy/cookie_test.go`; E2E omitted from this batch)
+- [x] `TestE2E_Cookie_EmptySecret_NeverEmits` — `cookie.secret` empty → no `Set-Cookie: TG.OAUTH2` on any response; no cookie validation attempted
+- [x] `TestE2E_Cookie_WireCompat_GoldenBytes` — `cookie.wireCompat: true`; issue a cookie; decode base64; verify JSON payload field order and HMAC input match golden file at `testdata/cookie_wire_compat.golden` (Hard Invariant #10) — golden pinned by Go implementation (key-sorted; runtime fields normalized to `<runtime>`); replace with Java-captured shape in follow-up
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
+
+#### Task 54 — E2E: Hard invariants black-box (all 12 from USE_STORIES.md)
+
+One test per invariant, verifiable solely through the HTTP interface. Informed by the gap analysis from Task 33.
+
+- [x] `internal/e2e/hard_invariants_e2e_test.go`
+- [x] `TestE2E_Inv1_NoBodyRewriting` — backend serves a known byte sequence for `/v1/statement`; client response body matches byte-for-byte; no mutation
+- [x] `TestE2E_Inv2_NoRedirectFollowing` — backend returns `301 Location: http://other`; client receives `301`, NOT the redirect target's response
+- [x] `TestE2E_Inv3_CacheWriteBeforeFlush` — two backends; POST + immediate sticky GET must land on same backend (proves cache write precedes response flush)
+- [x] `TestE2E_Inv4_BoundedBuffering_OnlyStatement` — streaming-path backend returns 2 MiB body (`responseSize` is 1 MiB); gateway streams it through, no `502`; only `/v1/statement` is buffered
+- [ ] `TestE2E_Inv5_TamperedCookieIs500` — covered by Task 53 `TestE2E_Cookie_TamperedHMAC_Returns500` (cross-reference)
+- [ ] `TestE2E_Inv6_KillQueryByID` — covered by Task 40 (cross-reference)
+- [x] `TestE2E_Inv7_HopByHopStripped_BothDirections` — both request and response directions verified in one test (closes go-qa gap analysis "both directions" finding)
+- [x] `TestE2E_Inv8_XForwardedForAppends` — minimal inline assertion; substantive coverage in Task 39 `TestE2E_ForwardedHeaders_XForwardedForAppends`
+- [x] `TestE2E_Inv9_ExternalHeadersReplace` — mock router injects `X-Custom: router-value`; client `X-Custom: client-value` is replaced (single-value REPLACE)
+- [ ] `TestE2E_Inv10_CookieWireCompat` — covered by Task 53 `TestE2E_Cookie_WireCompat_GoldenBytes` (cross-reference)
+- [x] `TestE2E_Inv11_ReadyzRequiresProbe` — minimal inline assertion; substantive coverage in Task 46 `TestE2E_Readyz_503BeforeFirstProbe`
+- [x] `TestE2E_Inv12_ThreeHTTPClients_BehavioralSaturation` — slow router (500ms) + 20 concurrent proxy POSTs; assert `/trino-gateway/livez` responds <200ms under saturation
+- [x] `go vet ./...` + `golangci-lint run ./...` pass
+
+#### Task 55 — E2E: Java ↔ Go parity scenarios (extends Task 28 diff harness)
+
+Extends the committed diff-harness scenario corpus to cover admin API, routing, and history behaviors not yet compared against the Java gateway.
+
+- [x] Add 6 new scenario YAMLs under `cmd/goway-diff-harness/testdata/scenarios/`:
+  - [x] `admin-backend-crud.yaml` — add/activate/deactivate/delete backend via `/gateway/*`; diff wire JSON shape at each step
+  - [x] `external-routing-headers.yaml` — router injects `externalHeaders`; backend receives headers; diff upstream request seen by backend
+  - [x] `kill-query-routing.yaml` — submit query; send `KILL QUERY '<id>'`; assert routed to same backend as original query
+  - [x] `recovery-chain-history.yaml` — query recorded in history; new request for same queryId after cache clear → history-lookup routes correctly
+  - [x] `health-probe-unhealthy.yaml` — mark backend unhealthy; submit request; verify unhealthy backend excluded
+  - [x] `query-history-scoping.yaml` — two users submit queries; each sees only own records via webapp `findQueryHistory`
+- [x] Every `diff.ignore*` entry in new scenarios carries a `[JUSTIFIED]` comment
+- [x] All new scenarios pass `internal/diffharness/scenarios_validation_test.go::TestCommittedScenarios_LoadAndJustified`
+- [ ] All new scenarios pass in `cmd/goway-diff-harness/live_test.go` under `//go:build diff` (deferred: requires Docker fleet bootstrap; gated by Tasks 38/42-44 wiring)
+- [x] `go vet ./...` pass; `golangci-lint run ./...` not run in this task

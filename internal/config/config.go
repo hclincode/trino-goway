@@ -90,9 +90,10 @@ type Config struct {
 
 // ProxyConfig holds configuration for the proxy listener.
 type ProxyConfig struct {
-	Port           int      `yaml:"port"`           // default 8080
-	ResponseSize   DataSize `yaml:"responseSize"`   // default 1MiB; max body to buffer on POST /v1/statement
-	RequestTimeout Duration `yaml:"requestTimeout"` // default 30s
+	Port            int      `yaml:"port"`            // default 8080
+	ResponseSize    DataSize `yaml:"responseSize"`    // default 1MiB; max body to buffer on POST /v1/statement
+	RequestTimeout  Duration `yaml:"requestTimeout"`  // default 30s
+	PropagateErrors bool     `yaml:"propagateErrors"` // when true, non-empty routing errors return HTTP 400 instead of falling back
 }
 
 // AdminConfig holds configuration for the admin listener.
@@ -129,7 +130,7 @@ type ExternalConfig struct {
 
 // AuthConfig holds authentication configuration.
 type AuthConfig struct {
-	Type          string              `yaml:"type"`          // "OIDC", "LDAP", "NOOP"
+	Type          string              `yaml:"type"` // "OIDC", "LDAP", "NOOP"
 	OIDC          OIDCConfig          `yaml:"oidc"`
 	LDAP          LDAPConfig          `yaml:"ldap"`
 	Authorization AuthorizationConfig `yaml:"authorization"`

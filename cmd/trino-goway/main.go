@@ -80,6 +80,9 @@ func run(configPath string, log *slog.Logger) error {
 	}
 	monitorClient := &http.Client{
 		Timeout: cfg.Monitor.CheckTimeout.D,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 	routerClient := &http.Client{
 		Timeout: cfg.Routing.External.Timeout.D,
@@ -131,14 +134,19 @@ func run(configPath string, log *slog.Logger) error {
 	}
 
 	// --- Proxy. ---
+	var proxyHistory proxy.HistoryRecorder
+	if historyDAO != nil {
+		proxyHistory = &historyAdapter{dao: historyDAO}
+	}
 	proxyHandler := proxy.New(proxy.Config{
-		Proxy:  cfg.Proxy,
-		Cookie: cfg.Cookie,
-		Auth:   cfg.Auth,
-		Client: proxyClient,
-		Router: router,
-		AuthMW: authMW,
-		Log:    log.With("component", "proxy"),
+		Proxy:   cfg.Proxy,
+		Cookie:  cfg.Cookie,
+		Auth:    cfg.Auth,
+		Client:  proxyClient,
+		Router:  router,
+		History: proxyHistory,
+		AuthMW:  authMW,
+		Log:     log.With("component", "proxy"),
 	})
 
 	// --- Admin. ---
@@ -268,6 +276,20 @@ func refreshBackends(ctx context.Context, dao *persistence.BackendDAO, mon *moni
 // activeBackendAdapter adapts *persistence.BackendDAO to routing.BackendLister.
 type activeBackendAdapter struct {
 	dao *persistence.BackendDAO
+}
+
+// historyAdapter adapts *persistence.HistoryDAO to proxy.HistoryRecorder.
+type historyAdapter struct {
+	dao *persistence.HistoryDAO
+}
+
+func (h *historyAdapter) Insert(ctx context.Context, queryID, backendURL, userName, source string) error {
+	return h.dao.Insert(ctx, persistence.QueryRecord{
+		QueryID:    queryID,
+		BackendURL: backendURL,
+		UserName:   userName,
+		Source:     source,
+	})
 }
 
 func (a *activeBackendAdapter) ListActive(ctx context.Context) ([]routing.ActiveBackend, error) {

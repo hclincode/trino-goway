@@ -31,6 +31,9 @@ go.work.sum
 # .idea/
 # .vscode/
 
+# macOS
+.DS_Store
+
 # Local Claude tooling
 .claude/
 
