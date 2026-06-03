@@ -14,7 +14,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { Role, useAccessStore } from '@/stores/access';
 import type { QueryDetail } from '@/types/api';
-import { useTimezone } from '@/context/timezone';
+import { useTimezone } from '@/context/timezoneContext';
 import { formatTimestamp } from '@/utils/time';
 import { ExternalLink } from '@/components/ExternalLink';
 import { useBackends } from '@/features/cluster/queries';

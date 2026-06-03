@@ -159,7 +159,7 @@ A task is **not** done until all four gates pass locally, in this order:
 
 ```bash
 pnpm typecheck   # tsc --noEmit (strict)
-pnpm lint        # eslint . (flat config) — zero errors
+pnpm lint        # eslint . --max-warnings 0 — zero errors AND zero warnings
 pnpm test        # vitest run — all green
 pnpm build       # vite build — produces dist/ with no errors
 ```
@@ -173,7 +173,7 @@ Required `package.json` scripts (exact names):
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "test": "vitest run",

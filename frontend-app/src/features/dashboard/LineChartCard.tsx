@@ -4,7 +4,7 @@ import ReactECharts from 'echarts-for-react';
 import type { EChartsOption } from 'echarts';
 import { useTranslation } from 'react-i18next';
 import type { DistributionDetail } from '@/types/api';
-import { useTimezone } from '@/context/timezone';
+import { useTimezone } from '@/context/timezoneContext';
 import { useChartColors } from '@/hooks/useChartColors';
 import { buildLineChartModel } from './lineChart';
 

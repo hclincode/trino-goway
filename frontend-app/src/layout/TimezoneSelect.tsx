@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { Select, Typography } from 'antd';
 import { useTranslation } from 'react-i18next';
-import { useTimezone } from '@/context/timezone';
+import { useTimezone } from '@/context/timezoneContext';
 import { getTimeZoneOptions } from '@/utils/time';
 
 /** Header timezone dropdown (filterable). Affects dashboard + history times. */

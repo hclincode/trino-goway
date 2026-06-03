@@ -1,22 +1,6 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useMemo,
-  useState,
-  type ReactNode,
-} from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { defaultTimezone } from '@/utils/time';
-
-interface TimezoneContextValue {
-  timezone: string;
-  changeTimezone: (tz: string) => void;
-}
-
-const TimezoneContext = createContext<TimezoneContextValue>({
-  timezone: 'UTC',
-  changeTimezone: () => {},
-});
+import { TimezoneContext } from './timezoneContext';
 
 /**
  * Provides the selected display timezone. In-memory only (matches the
@@ -34,8 +18,4 @@ export function TimezoneProvider({ children }: { children: ReactNode }) {
       {children}
     </TimezoneContext.Provider>
   );
-}
-
-export function useTimezone(): TimezoneContextValue {
-  return useContext(TimezoneContext);
 }

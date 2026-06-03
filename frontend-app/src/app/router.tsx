@@ -4,35 +4,19 @@ import {
   Navigate,
   type RouteObject,
 } from 'react-router-dom';
-import { Spin } from 'antd';
 import { AuthGate } from './AuthGate';
 import { RouteGuard } from './RouteGuard';
+import { PageFallback } from './PageFallback';
 import { NAV_ROUTES } from './navConfig';
+import { BASENAME } from './constants';
 
-const DashboardPage = lazy(
-  () => import('@/features/dashboard/DashboardPage'),
-);
+const DashboardPage = lazy(() => import('@/features/dashboard/DashboardPage'));
 const ClusterPage = lazy(() => import('@/features/cluster/ClusterPage'));
 const HistoryPage = lazy(() => import('@/features/history/HistoryPage'));
 const RoutingRulesPage = lazy(
   () => import('@/features/routingRules/RoutingRulesPage'),
 );
 const HomePage = lazy(() => import('@/features/home/HomePage'));
-
-/**
- * Base path the Go gateway serves the bundle under. Keep in sync with Vite
- * `base` in vite.config.ts. Browser router requires the gateway to SPA-fallback
- * unknown sub-paths to index.html (see docs/PRD.md backend dependency).
- */
-export const BASENAME = '/trino-gateway';
-
-function PageFallback() {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
-      <Spin size="large" />
-    </div>
-  );
-}
 
 const PAGE_COMPONENTS: Record<string, React.LazyExoticComponent<React.FC>> = {
   dashboard: DashboardPage,

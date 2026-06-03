@@ -20,6 +20,24 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  build: {
+    // antd and echarts are each irreducibly ~1 MB; we isolate them into their
+    // own long-cached vendor chunks rather than try to split them further, so
+    // raise the warning threshold above their known size.
+    chunkSizeWarningLimit: 1200,
+    rollupOptions: {
+      output: {
+        // Split large, stable vendors into their own cacheable chunks so the
+        // entry/page bundles stay small.
+        manualChunks: {
+          react: ['react', 'react-dom', 'react-router-dom'],
+          antd: ['antd', '@ant-design/icons'],
+          echarts: ['echarts', 'echarts-for-react'],
+          query: ['@tanstack/react-query', 'zustand'],
+        },
+      },
+    },
+  },
   server: {
     proxy: {
       [PROXY_PATH]: {

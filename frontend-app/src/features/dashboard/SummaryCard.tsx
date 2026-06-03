@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { DistributionDetail } from '@/types/api';
 import { useAccessStore } from '@/stores/access';
-import { useTimezone } from '@/context/timezone';
+import { useTimezone } from '@/context/timezoneContext';
 import { formatZonedDateTime } from '@/utils/time';
 
 interface Props {
