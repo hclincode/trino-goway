@@ -462,3 +462,104 @@ Extends the committed diff-harness scenario corpus to cover admin API, routing, 
 - [x] All new scenarios pass `internal/diffharness/scenarios_validation_test.go::TestCommittedScenarios_LoadAndJustified`
 - [ ] All new scenarios pass in `cmd/goway-diff-harness/live_test.go` under `//go:build diff` (deferred: requires Docker fleet bootstrap; gated by Tasks 38/42-44 wiring)
 - [x] `go vet ./...` pass; `golangci-lint run ./...` not run in this task
+
+---
+
+## Phase 9: Prometheus Metrics & Observability
+
+Realizes the `docs/PRD.md` locked decision "Metrics = `prometheus/client_golang`", which is currently **unimplemented** — there is no `/metrics` route and the dependency is absent (see `docs/topics/gateway-docs-compatibility-audit.md` §3.2).
+
+**Baseline:** the Java gateway exposes an OpenMetrics endpoint at `/metrics` (`io.airlift:openmetrics` + `JmxOpenMetricsModule`, `HaGatewayLauncher`) carrying JVM/platform metrics **plus** a small set of application metrics: `ProxyHandlerStats.requestCount` (`CounterStat`), per-backend `ClusterMetricsStats.getActivationStatus` (gauge `1`/`0`/`-1`), and per-backend `TrinoStatus` health (`{cluster}_TrinoStatusHealthy`/`Unhealthy`/`Pending`, asserted in `TestGatewayHaMultipleBackend.testClusterStatsJMX`).
+
+**Principle for this phase:**
+
+- **Exclude JVM/Java-runtime metrics** (heap regions, GC pauses, classloader, JIT, thread pools) and **replace them with Go equivalents** — goroutines, Go GC, heap/alloc, process CPU/RSS/open-FDs — via the standard `prometheus/client_golang` collectors.
+- **Mirror the gateway's application metrics** (proxied requests, per-backend activation + health status), then expand idiomatically (HTTP server, routing/recovery, auth, persistence).
+- Serve OpenMetrics text on the **admin** listener (keeps scrape traffic off the proxy hot path), behind a config toggle, default path `/metrics`.
+- Naming: `trino_goway_*` namespace, Prometheus-idiomatic names + labels (not JMX-derived). Task 64 documents the Java→Go name mapping for dashboard migration.
+
+Every task carries `go vet ./...` + `golangci-lint run ./...` and unit tests; end-to-end exposure is verified by a scrape test (Task 63). No global registry — explicit constructor wiring per `docs/PRD.md` §Key Architecture Decisions.
+
+### Task 56 — Metrics infrastructure + `/metrics` endpoint
+
+- [ ] Add `github.com/prometheus/client_golang` to `go.mod`
+- [ ] `internal/metrics/doc.go` — package doc
+- [ ] `internal/metrics/registry.go` — own `*prometheus.Registry` (not the global default); `Handler()` via `promhttp.HandlerFor(reg, promhttp.HandlerOpts{EnableOpenMetrics: true})`
+- [ ] `internal/config/config.go` — `MetricsConfig{Enabled bool (default true), Path string (default "/metrics")}` under a new `metrics:` node; extend `Validate()`
+- [ ] Mount the metrics route on the **admin** server (`internal/admin`/`internal/lifecycle`); when `enabled=false`, do not register (route returns 404)
+- [ ] `cmd/trino-goway/main.go` — explicit construction + injection of the registry into components that record metrics
+- [ ] `internal/metrics/registry_test.go` — handler 200 + `Content-Type: application/openmetrics-text...`; disabled → not registered
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+
+### Task 57 — Go runtime + process collectors (JVM-metric replacement)
+
+- [ ] Register `collectors.NewGoCollector()` (goroutines, threads, Go GC, heap/alloc/objects) on the registry
+- [ ] Register `collectors.NewProcessCollector(...)` (process CPU seconds, resident/virtual memory, open FDs, start time)
+- [ ] Code comment documenting these as the Go equivalent of the Java gateway's excluded JVM/process metrics
+- [ ] Test: `go_goroutines`, `go_gc_*`, `process_*` families present in scrape output
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+
+### Task 58 — HTTP server metrics middleware (jetty/http-server equivalent)
+
+- [ ] `internal/metrics/httpmw.go` — chi middleware recording `trino_goway_http_requests_total{listener,method,code}`, `trino_goway_http_request_duration_seconds` (histogram, by `listener,method`), `trino_goway_http_requests_in_flight{listener}`
+- [ ] Mount on both proxy and admin listeners with a `listener` label (`proxy`/`admin`); use route patterns (not raw paths) to bound cardinality
+- [ ] Test: counters increment, duration observed, in-flight gauge balances to zero
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+
+### Task 59 — Proxy + forwarding metrics (mirrors `ProxyHandlerStats`)
+
+- [ ] `trino_goway_proxy_requests_total{backend,routing_group,outcome}` — `outcome` ∈ `ok|fallback|error|kill_query` (superset of Java `requestCount`)
+- [ ] `trino_goway_proxy_upstream_duration_seconds` histogram (label `backend`)
+- [ ] `trino_goway_proxy_oversized_responses_total` — the 502 fail-loud path (`internal/proxy/forward.go`)
+- [ ] `trino_goway_proxy_statement_cache_writes_total` — sticky-cache writes (Hard Invariant #3)
+- [ ] Inject a nil-safe metrics recorder interface into `internal/proxy` (consumer-owned, same pattern as `HistoryRecorder`)
+- [ ] Test against the recorder; nil recorder is a no-op
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+
+### Task 60 — Backend health + activation metrics (mirrors `ClusterMetricsStats` + `TrinoStatus`)
+
+- [ ] `trino_goway_backend_status{backend,status}` gauge encoding `HEALTHY|UNHEALTHY|PENDING` (mirror `{cluster}_TrinoStatus*`)
+- [ ] `trino_goway_backend_activation_status{backend}` gauge `1`/`0`/`-1` (mirror `ClusterMetricsStats.getActivationStatus`)
+- [ ] `trino_goway_backends{status}` and `trino_goway_backends_active` aggregate gauges
+- [ ] Source from `internal/monitor` status map; register/unregister per-backend series as backends are added/removed — avoid stale series (mirror `ClusterMetricsStatsExporter` lifecycle)
+- [ ] Test: gauges track monitor status transitions; removed-backend series are cleaned up
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+
+### Task 61 — Routing + recovery-chain metrics
+
+- [ ] `trino_goway_router_calls_total{transport,outcome}` — `transport` ∈ `http|grpc`; `outcome` ∈ `ok|error|timeout|fallback`
+- [ ] `trino_goway_router_call_duration_seconds{transport}` histogram
+- [ ] `trino_goway_routing_cache_events_total{event}` — `hit|miss`
+- [ ] `trino_goway_recovery_chain_steps_total{step}` — `history|probe|default` (Hard Invariant #4 observability)
+- [ ] `trino_goway_kill_query_routes_total` (Hard Invariant #6)
+- [ ] Instrument `internal/routing` (`external_http.go`, `external_grpc.go`, `cache.go`, `recovery.go`, `router.go`)
+- [ ] Test
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+
+### Task 62 — Auth + persistence metrics
+
+- [ ] Auth: `trino_goway_auth_requests_total{type,result}` (`type` ∈ `oidc|ldap|noop`; `result` ∈ `allow|deny`), `trino_goway_jwks_refresh_total{result}`, `trino_goway_jwks_keys` gauge (observability for the JWKS-caching fix)
+- [ ] Persistence: `trino_goway_db_up` gauge, `trino_goway_query_history_inserts_total{result}`, `trino_goway_backend_refresh_total{result}` (the 15s reload loop in `cmd/trino-goway/main.go`)
+- [ ] Instrument `internal/auth`, `internal/persistence`, and the backend-refresh loop
+- [ ] Test
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+
+### Task 63 — E2E: `/metrics` scrape
+
+- [ ] `internal/e2e/metrics_e2e_test.go` (`//go:build e2e`)
+- [ ] `TestE2E_Metrics_Endpoint_Scrape` — GET admin `/metrics` → 200, OpenMetrics content-type, parses cleanly with `prometheus/common/expfmt`
+- [ ] `TestE2E_Metrics_GoRuntimeFamilies` — `go_goroutines` + `process_*` present
+- [ ] `TestE2E_Metrics_AppFamilies` — after a registered backend + a proxied request: `trino_goway_proxy_requests_total` and `trino_goway_backend_status` present with expected labels
+- [ ] `TestE2E_Metrics_Disabled` — `metrics.enabled=false` → `/metrics` returns 404
+- [ ] `goleak` clean
+- [ ] `go vet -tags e2e ./internal/e2e/...` pass
+
+### Task 64 — Docs, config, and PRD/SCOPE reconciliation
+
+- [ ] `configs/config.example.yaml` — documented `metrics:` block (enabled, path)
+- [ ] `README.md` — metrics section + Prometheus `scrape_configs` example targeting the admin port
+- [ ] `docs/PRD.md` — mark the metrics decision as implemented
+- [ ] `docs/SCOPE.md` — add "Prometheus metrics endpoint" to §1 Locked In Scope (requires team-lead sign-off per §5; this phase + the audit doc are the written rationale)
+- [ ] `docs/topics/gateway-docs-compatibility-audit.md` — mark §3.2 resolved
+- [ ] Java→Go metric-name mapping table (in the audit doc or a new reference) for dashboard migration
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
