@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-24  
 **Status:** Draft  
-**Decision basis:** `topics/do-we-needs-golang-trino-gateway.md` (unanimous PROCEED WITH CAVEATS, 7/7)
+**Decision basis:** `doc/topics/do-we-needs-golang-trino-gateway.md` (unanimous PROCEED WITH CAVEATS, 7/7)
 
 ---
 
@@ -190,4 +190,4 @@ Route spooled segment GET requests to the coordinator that owns the segment.
 
 ---
 
-*Reference: `topics/do-we-needs-golang-trino-gateway.md` · `studies/CONVENTIONS.md` · `TODO.md`*
+*Reference: `doc/topics/do-we-needs-golang-trino-gateway.md` · `doc/studies/CONVENTIONS.md` · `TODO.md`*
