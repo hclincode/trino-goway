@@ -34,8 +34,8 @@ go.work.sum
 # macOS
 .DS_Store
 
-# Local Claude tooling
-.claude/
+# Local Claude tooling — share .claude/settings.json, keep personal overrides local
+.claude/settings.local.json
 
 # Compiled binaries (built locally)
 goway-migrate-config

@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build *)",
+      "Bash(go test *)",
+      "Bash(go vet *)",
+      "Bash(go mod *)",
+      "Bash(source * && gvm use * && go build *)",
+      "Bash(source * && gvm use * && go test *)",
+      "Bash(source * && gvm use * && go vet *)",
+      "Bash(gitnexus status *)",
+      "Bash(gitnexus --version *)",
+      "Bash(gitnexus --help *)",
+      "Bash(kubectl get *)",
+      "Bash(kubectl describe *)",
+      "Bash(helm list *)",
+      "Bash(helm version *)"
+    ]
+  }
+}
