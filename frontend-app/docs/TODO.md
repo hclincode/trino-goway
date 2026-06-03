@@ -183,15 +183,24 @@ to the checklist in `PRD.md`.
 
 ## Phase 5 — Routing Rules (`/routing-rules`)
 
-- [ ] **5.1** `routingRules` query → `getRoutingRules` (verb per router): loading
+- [x] **5.1** `routingRules` query → `getRoutingRules` (verb per router): loading
   `Spin`; 204/`isExternalRouting`→external notice; `[]`→empty notice. **(parity:
   loading, external notice, empty state)** **Gate.**
-- [ ] **5.2** Rule cards (one antd `Card` per rule, title `Routing rule #N`): fields
+- [x] **5.2** Rule cards (one antd `Card` per rule, title `Routing rule #N`): fields
   Name (always disabled), Description, Priority, Condition, Actions (TextArea,
   comma-joined display ↔ array on save). Independent per-card edit state; ADMIN-only
   Edit/Save. **(parity: cards, fields, actions, edit mode)** **Gate.**
-- [ ] **5.3** Save → `POST /webapp/updateRoutingRules` (full rule); exit edit mode,
-  update in-memory rule, success/error toast. **(parity: save, toasts)** **Gate.**
+- [x] **5.3** Save → `POST /webapp/updateRoutingRules` (full rule); exit edit mode,
+  update in-memory rule (via query invalidation), success/error toast. **(parity:
+  save, toasts)** **Gate.**
+
+> **Phase 5 notes:**
+> - `getRoutingRules` resolves to either `RoutingRulesData[]` or the client's
+>   `EXTERNAL_ROUTING` sentinel (204). The `isExternalRouting` type guard is
+>   unit-tested; the page shows Spin → external notice → empty notice → cards.
+> - Each `RuleCard` owns its own edit state, so only the clicked rule enters edit
+>   mode. Actions display comma-joined and save back as a trimmed array. Save
+>   invalidates `['routingRules']` to refresh rather than mutating in place.
 
 ## Phase 6 — Final: polish, accessibility, tests, build, wiring
 
