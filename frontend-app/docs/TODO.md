@@ -96,19 +96,27 @@ to the checklist in `PRD.md`.
 
 ## Phase 2 — Dashboard (`/dashboard`)
 
-- [ ] **2.1** `dashboard` query hook → `POST /webapp/getDistribution`; types. **Gate.**
-- [ ] **2.2** Summary card: antd `Descriptions`, 9 rows (start time zoned, backend
+- [x] **2.1** `dashboard` query hook → `POST /webapp/getDistribution`; types. **Gate.**
+- [x] **2.2** Summary card: antd `Descriptions`, 9 rows (start time zoned, backend
   counts, QPH/QPM/QPS with `.toFixed(2)`), help `Tooltip` on QPH/QPM/QPS, "Backends"
   link to `/cluster` when permitted. **(parity: summary card, tooltips, link)** **Gate.**
-- [ ] **2.3** ECharts line chart via `echarts-for-react`: one smooth series per
+- [x] **2.3** ECharts line chart via `echarts-for-react`: one smooth series per
   backend, x-axis minute buckets in selected tz, `yAxis.minInterval:1`, axis tooltip;
   graceful empty state when `lineChart` is `{}` (Go gap #8). **(parity: line chart)**
   **Gate.**
-- [ ] **2.4** ECharts doughnut chart: slice per backend, `radius:['40%','70%']`,
+- [x] **2.4** ECharts doughnut chart: slice per backend, `radius:['40%','70%']`,
   hover emphasis label, item tooltip. **(parity: doughnut)** **Gate.**
-- [ ] **2.5** Theme-aware legend colors for both charts: read antd design token / CSS
-  var on theme change (replaces the original body-attribute MutationObserver).
-  **(parity: theme-aware legends)** **Gate.**
+- [x] **2.5** Theme-aware legend colors for both charts: re-key charts on the
+  resolved light/dark mode (`useChartColors`), replacing the original
+  body-attribute MutationObserver. **(parity: theme-aware legends)** **Gate.**
+
+> **Phase 2 notes:**
+> - Line-chart minute-bucketing extracted to a pure `lineChart.ts` and unit-tested
+>   (empty input → empty model; cross-backend alignment; same-minute summing).
+> - Charts re-render on theme switch via a `key={mode}` on `ReactECharts` driven by
+>   `useChartColors` — simpler and more reliable than observing a body attribute.
+> - DashboardPage is lazy-loaded, so ECharts (~1.1 MB) sits in its own route chunk
+>   rather than the entry bundle.
 
 ## Phase 3 — Cluster (`/cluster`)
 

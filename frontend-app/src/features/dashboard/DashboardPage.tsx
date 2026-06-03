@@ -1,8 +1,24 @@
-import { Typography } from 'antd';
-import { useTranslation } from 'react-i18next';
+import { Col, Row } from 'antd';
+import { useDistribution } from './queries';
+import { SummaryCard } from './SummaryCard';
+import { LineChartCard } from './LineChartCard';
+import { DoughnutChartCard } from './DoughnutChartCard';
 
-// Phase 1 placeholder; the dashboard is implemented in Phase 2.
+/** Gateway health + query-throughput overview. */
 export default function DashboardPage() {
-  const { t } = useTranslation();
-  return <Typography.Title level={3}>{t('menu.dashboard')}</Typography.Title>;
+  const { data } = useDistribution();
+
+  return (
+    <Row gutter={[16, 16]}>
+      <Col xs={24}>
+        <SummaryCard detail={data} />
+      </Col>
+      <Col xs={24} lg={16}>
+        <LineChartCard detail={data} />
+      </Col>
+      <Col xs={24} lg={8}>
+        <DoughnutChartCard detail={data} />
+      </Col>
+    </Row>
+  );
 }
