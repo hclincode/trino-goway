@@ -2,7 +2,7 @@
 
 **Status:** Locked  
 **Authority:** Team lead sign-off required to change any ruling in sections 1 or 2.  
-**Reference:** `PRD.md`, `doc/topics/do-we-needs-golang-trino-gateway.md`
+**Reference:** `PRD.md`, `docs/topics/do-we-needs-golang-trino-gateway.md`
 
 ---
 
@@ -20,7 +20,7 @@
 | Auth — LDAP | `go-ldap/ldap` dependency |
 | Auth — noop | Pass-through; zero external calls |
 | Gateway cookies | HMAC-SHA256 wire-compatible with Java `GatewayCookie`; `TG.OAUTH2` cookie for OAuth2 flow stickiness; `wireCompat: true` default for blue/green; `wireCompat: false` available for clean-break deployments |
-| Admin REST API | All routes and `@RolesAllowed` roles (`ADMIN`/`USER`/`API`) from Java surface; spec from `doc/studies/trino-gateway/admin-api-surface.java-analyst.md` (Task 16) |
+| Admin REST API | All routes and `@RolesAllowed` roles (`ADMIN`/`USER`/`API`) from Java surface; spec from `docs/studies/trino-gateway/admin-api-surface.java-analyst.md` (Task 16) |
 | Web UI | Serve existing Java-compiled static bundle unchanged; embed compiled `webapp/` assets via `//go:embed`; no UI rewrite |
 | Config migration tool — `goway-migrate-config` | One-shot binary: Java YAML → Go YAML; config compat is loose, not strict |
 
@@ -67,7 +67,7 @@
 ### `/v1/spooled/*` Gateway-Level Sticky Routing (non-groomed)
 
 **What it is:** Route spooled segment GET requests to the coordinator that owns the segment.
-**Why excluded:** Three independent blockers found in Phase 3 study: (1) Trino JDBC driver uses a separate `OkHttpClient` without `CookieJar` for segment downloads — cookies set on `/v1/statement` responses are never sent on segment GETs; (2) segment identifier is AES-256 encrypted with Trino's internal key — queryId is not recoverable from the URL; (3) the Java gateway does not implement this either — routing uses the query-history DB, not cookies. See `doc/studies/trino-gateway/gateway-cookies-and-sticky-routing.go-implementer.md` §6.
+**Why excluded:** Three independent blockers found in Phase 3 study: (1) Trino JDBC driver uses a separate `OkHttpClient` without `CookieJar` for segment downloads — cookies set on `/v1/statement` responses are never sent on segment GETs; (2) segment identifier is AES-256 encrypted with Trino's internal key — queryId is not recoverable from the URL; (3) the Java gateway does not implement this either — routing uses the query-history DB, not cookies. See `docs/studies/trino-gateway/gateway-cookies-and-sticky-routing.go-implementer.md` §6.
 **Operator guidance:** Use `STORAGE` mode (presigned URIs) for multi-cluster deployments, or configure load-balancer session affinity outside the gateway.
 **Promotion condition:** A viable mechanism is identified that does not require body rewriting (Hard Invariant #1) or Trino's internal spooling key.
 
@@ -111,8 +111,8 @@ These seven invariants MUST NOT be violated in any implementation task. See `PRD
 
 Any change to sections 1 or 2 requires all three of the following in the same git commit:
 
-1. **Written rationale** in a new file under `doc/topics/` documenting the change, operator demand evidence, and implementation cost.
-2. **Team-lead acknowledgment** in the git commit message explicitly referencing the `doc/topics/` discussion doc by filename.
+1. **Written rationale** in a new file under `docs/topics/` documenting the change, operator demand evidence, and implementation cost.
+2. **Team-lead acknowledgment** in the git commit message explicitly referencing the `docs/topics/` discussion doc by filename.
 3. **Updated `SCOPE.md`** reflecting the new ruling.
 
 Changes that arrive without all three artifacts will be reverted.

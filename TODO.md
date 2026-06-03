@@ -16,17 +16,17 @@
 
 ## Phase 2: Topic Discussion
 
-- [x] Task 9 — Discuss: Do we need a Go version of trino-gateway? (result: `doc/topics/do-we-needs-golang-trino-gateway.md` — unanimous PROCEED WITH CAVEATS)
+- [x] Task 9 — Discuss: Do we need a Go version of trino-gateway? (result: `docs/topics/do-we-needs-golang-trino-gateway.md` — unanimous PROCEED WITH CAVEATS)
 
 ## Phase 3: Architecture Design + Targeted Studies
 
 - [x] Task 10 — Architect writes `phase2-gate-responses.architect.md` (library decisions, DI stance, streaming/oracle/cookie rulings, 6th hard invariant, sequencing constraints; includes ruling on gRPC in v1 vs. Non-Groomed)
 - [x] Task 11 — Go-implementer writes `SCOPE.md` (locked scope, deferred scope, reversal cost per item; team-lead sign-off required to change any ruling)
 - [x] Task 12 — Go-implementer writes `gateway-cookies-and-sticky-routing.go-implementer.md` (cookie design: HMAC-SHA256 wire-compat with Java `GatewayCookie`, `wireCompat` config flag, `/v1/spooled/*` + `/v1/spooled/ack` sticky routing via `TG.*` cookie; required before proxy implementation starts)
-- [x] Task 13 — trino-expert studies `/v1/spooled/*` URL structure in Trino source (`doc/studies/trino/spooled-segment-protocol.trino-expert.md`): token format, whether queryId is encoded, redirect chain, and whether cookie is the only viable sticky mechanism
-- [x] Task 14 — go-implementer studies `GatewayCookie.java` in depth (`doc/studies/trino-gateway/gateway-cookie-internals.go-implementer.md`): HMAC-SHA256 payload format, `routingPaths` matching logic, cookie issue/validate/invalidate lifecycle; feeds into Task 12
-- [x] Task 15 — java-analyst produces complete external routing contract study (`doc/studies/trino-gateway/external-routing-contract.java-analyst.md`): all request fields (`RoutingGroupExternalBody`) and response fields (`ExternalRouterResponse`), which `trinoQueryProperties` sub-fields are empty without `trino-parser`, `propagateErrors` fallback behavior, header-forwarding and `excludeHeaders` policy; pin the exact JSON shapes that Go HTTP + gRPC transports must replicate
-- [x] Task 16 — java-analyst or go-implementer catalogs admin REST API endpoints (`doc/studies/trino-gateway/admin-api-surface.java-analyst.md`): all routes, request/response shapes, `@RolesAllowed` per endpoint; spec for Task 20 (`internal/admin`)
+- [x] Task 13 — trino-expert studies `/v1/spooled/*` URL structure in Trino source (`docs/studies/trino/spooled-segment-protocol.trino-expert.md`): token format, whether queryId is encoded, redirect chain, and whether cookie is the only viable sticky mechanism
+- [x] Task 14 — go-implementer studies `GatewayCookie.java` in depth (`docs/studies/trino-gateway/gateway-cookie-internals.go-implementer.md`): HMAC-SHA256 payload format, `routingPaths` matching logic, cookie issue/validate/invalidate lifecycle; feeds into Task 12
+- [x] Task 15 — java-analyst produces complete external routing contract study (`docs/studies/trino-gateway/external-routing-contract.java-analyst.md`): all request fields (`RoutingGroupExternalBody`) and response fields (`ExternalRouterResponse`), which `trinoQueryProperties` sub-fields are empty without `trino-parser`, `propagateErrors` fallback behavior, header-forwarding and `excludeHeaders` policy; pin the exact JSON shapes that Go HTTP + gRPC transports must replicate
+- [x] Task 16 — java-analyst or go-implementer catalogs admin REST API endpoints (`docs/studies/trino-gateway/admin-api-surface.java-analyst.md`): all routes, request/response shapes, `@RolesAllowed` per endpoint; spec for Task 20 (`internal/admin`)
 
 ## Phase 4: Implementation
 
@@ -177,29 +177,29 @@ Critical path: **17 → 18 → 19 → 20 → 24**. Tasks 21, 22, 23, 25 off crit
 
 ### Phase 6: Team Review
 
-Each review task produces a document in `doc/studies/`. Review tasks read the trino-goway implementation and cross-reference it against Phase 1–3 study findings. No code is written. All four tasks can run in parallel.
+Each review task produces a document in `docs/studies/`. Review tasks read the trino-goway implementation and cross-reference it against Phase 1–3 study findings. No code is written. All four tasks can run in parallel.
 
-- [x] Task 31 — **trino-expert behavioral audit** (`doc/studies/trino-gateway/behavioral-audit.trino-expert.md`)
-  - Cross-reference the actual `internal/proxy/` and `internal/routing/` implementation against behavioral contracts documented in `doc/studies/trino-gateway/architectural-intent.trino-expert.md` and `doc/studies/both/protocol-constraints-on-the-gateway.architect.md`
+- [x] Task 31 — **trino-expert behavioral audit** (`docs/studies/trino-gateway/behavioral-audit.trino-expert.md`)
+  - Cross-reference the actual `internal/proxy/` and `internal/routing/` implementation against behavioral contracts documented in `docs/studies/trino-gateway/architectural-intent.trino-expert.md` and `docs/studies/both/protocol-constraints-on-the-gateway.architect.md`
   - Flag any behavioral edge cases where trino-goway diverges from Java trino-gateway: header handling quirks, `nextUri` host construction, body passthrough, hop-by-hop stripping
   - Document intentional divergences (bugs fixed in Go) vs accidental gaps
   - Enumerate each behavior as: IMPLEMENTED / GAP / INTENTIONAL-DIVERGENCE, with evidence (file:line)
   - Flag which gaps are blockers for Phase 8 E2E tests vs acceptable in v1
 
-- [x] Task 32 — **java-analyst admin API completeness audit** (`doc/studies/trino-gateway/admin-api-completeness-gap.java-analyst.md`)
-  - Cross-reference every endpoint in `doc/studies/trino-gateway/admin-api-surface.java-analyst.md` against `internal/admin/` implementation
+- [x] Task 32 — **java-analyst admin API completeness audit** (`docs/studies/trino-gateway/admin-api-completeness-gap.java-analyst.md`)
+  - Cross-reference every endpoint in `docs/studies/trino-gateway/admin-api-surface.java-analyst.md` against `internal/admin/` implementation
   - For each endpoint: COMPLETE (response shape matches Java wire format) / PARTIAL (exists but shape differs) / MISSING
   - Verify wire JSON shapes for `ProxyBackend`, `QueryDetail`, `TableData<T>`, and the `{code, msg, data}` webapp envelope match Java exactly
   - Identify any `@RolesAllowed` role mismatches between Java and Go
   - Output table feeds directly into Task 47 (admin E2E) and Task 48 (webapp E2E) as the authoritative checklist
 
-- [x] Task 33 — **go-qa proxy seam gap analysis** (`doc/studies/both/proxy-seam-gap-analysis.go-qa.md`)
+- [x] Task 33 — **go-qa proxy seam gap analysis** (`docs/studies/both/proxy-seam-gap-analysis.go-qa.md`)
   - Map all 12 hard invariants from `USE_STORIES.md § Hard Invariants` to existing tests in `internal/proxy/proxy_test.go`, `internal/e2e/proxy_e2e_test.go`, and `cmd/goway-diff-harness/testdata/scenarios/`
   - For each invariant: COVERED (cite test name) / PARTIALLY-COVERED (explain gap) / NOT-COVERED
   - Identify which invariants (#4 bounded buffering, #7 hop-by-hop, #8 X-Forwarded-For append, #9 externalHeaders REPLACE, #11 readyz timing, #12 three clients) have no black-box E2E test
   - Output feeds into Task 54 (hard invariants E2E) as the test specification
 
-- [x] Task 34 — **qa-tech-lead E2E coverage gap document** (`doc/studies/both/e2e-coverage-plan.qa-tech-lead.md`)
+- [x] Task 34 — **qa-tech-lead E2E coverage gap document** (`docs/studies/both/e2e-coverage-plan.qa-tech-lead.md`)
   - Map every acceptance criterion in `USE_STORIES.md` §1–§7 to: COVERED-BY-EXISTING-TEST (cite) / PLANNED-IN-TASK-N / NOT-COVERED
   - Identify acceptance criteria not verifiable via black-box (binary + HTTP) and propose white-box fallbacks
   - Confirm build-tag strategy (`//go:build e2e`) and CI integration points for Phase 8 tests

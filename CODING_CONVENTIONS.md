@@ -378,4 +378,4 @@ Run: `go test -run=TestFoo -update`. Commit the updated file as a deliberate, re
 
 ---
 
-*Reference: `PRD.md` · `SCOPE.md` · `doc/topics/phase2-gate-responses.architect.md`*
+*Reference: `PRD.md` · `SCOPE.md` · `docs/topics/phase2-gate-responses.architect.md`*

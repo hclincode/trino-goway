@@ -27,7 +27,7 @@ import (
 
 const (
 	// trinoImage pins the Trino server image. Kept in sync with the version
-	// recorded in doc/studies/both/component-signoff-rubric.qa-tech-lead.md (trino: 481-150-...).
+	// recorded in docs/studies/both/component-signoff-rubric.qa-tech-lead.md (trino: 481-150-...).
 	trinoImage = "trinodb/trino:481"
 
 	// trinoBootBudget bounds how long we wait for the coordinator to come up.
