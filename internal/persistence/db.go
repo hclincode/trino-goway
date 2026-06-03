@@ -2,7 +2,6 @@ package persistence
 
 import (
 	"context"
-	"embed"
 	"fmt"
 
 	"github.com/jmoiron/sqlx"
@@ -11,14 +10,12 @@ import (
 	"github.com/pressly/goose/v3"
 
 	"github.com/hclincode/trino-goway/internal/config"
+	"github.com/hclincode/trino-goway/migrations"
 )
-
-//go:embed migrations/*.sql
-var migrationFS embed.FS
 
 // Open opens a database connection pool for the given config.
 // Driver must be "postgres" or "mysql".
-// Runs goose migrations embedded from the migrations/ directory.
+// Runs goose migrations embedded from the top-level migrations package.
 func Open(ctx context.Context, cfg config.DBConfig) (*sqlx.DB, error) {
 	if cfg.Driver != "postgres" && cfg.Driver != "mysql" {
 		return nil, fmt.Errorf("persistence: open: unsupported driver %q", cfg.Driver)
@@ -40,11 +37,11 @@ func Open(ctx context.Context, cfg config.DBConfig) (*sqlx.DB, error) {
 // MigrateUp runs all embedded goose migrations against the given DB.
 // Driver must be "postgres" or "mysql".
 func MigrateUp(db *sqlx.DB, driver string) error {
-	goose.SetBaseFS(migrationFS)
+	goose.SetBaseFS(migrations.FS)
 	if err := goose.SetDialect(driver); err != nil {
 		return fmt.Errorf("persistence: migrate: set dialect: %w", err)
 	}
-	if err := goose.Up(db.DB, "migrations"); err != nil {
+	if err := goose.Up(db.DB, "."); err != nil {
 		return fmt.Errorf("persistence: migrate: up: %w", err)
 	}
 	return nil
