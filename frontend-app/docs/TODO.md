@@ -120,27 +120,35 @@ to the checklist in `PRD.md`.
 
 ## Phase 3 — Cluster (`/cluster`)
 
-- [ ] **3.1** `backends` query → `POST /webapp/getAllBackends`; sort alpha by name on
+- [x] **3.1** `backends` query → `POST /webapp/getAllBackends`; sort alpha by name on
   load; mutations (`saveBackend`/`updateBackend`/`deleteBackend`) invalidate
   `['backends']`. **(parity: load sort)** **Gate.**
-- [ ] **3.2** antd `Table` columns: Name, RoutingGroup, ProxyToUrl, ExternalUrl,
+- [x] **3.2** antd `Table` columns: Name, RoutingGroup, ProxyToUrl, ExternalUrl,
   Queued, Running, Active, Status, Operations. Sortable Name/RoutingGroup/Queued/
   Running; RoutingGroup column filter by distinct values. **(parity: columns,
   sort/filter)** **Gate.**
-- [ ] **3.3** External-link cells (ProxyToUrl/ExternalUrl) in new tab; handle
+- [x] **3.3** External-link cells (ProxyToUrl/ExternalUrl) in new tab; handle
   absent/blank `externalUrl` as plain text (Go gap #7). Status `Tag` colors
-  (HEALTHY=green/UNHEALTHY=red/PENDING=yellow/UNKNOWN=default). **(parity: links,
+  (HEALTHY=green/UNHEALTHY=red/PENDING=gold/UNKNOWN=default). **(parity: links,
   status tag)** **Gate.**
-- [ ] **3.4** Active `Switch` column: ADMIN toggles → `updateBackend` (full record,
+- [x] **3.4** Active `Switch` column: ADMIN toggles → `updateBackend` (full record,
   flipped `active`) with per-row loading; non-ADMIN disabled. **(parity: active
   toggle)** **Gate.**
-- [ ] **3.5** Operations column + Create button in its header, ADMIN-only; Create/Edit
+- [x] **3.5** Operations column + Create button in its header, ADMIN-only; Create/Edit
   `Modal` (react-hook-form + zod): Name (disabled on edit), RoutingGroup, ProxyTo,
   ExternalUrl, Active. Create→`saveBackend`, Edit→`updateBackend`. **(parity:
   operations, create button, modal)** **Gate.**
-- [ ] **3.6** Delete `Popconfirm` → `deleteBackend {name}`; success/error toasts on
+- [x] **3.6** Delete `Popconfirm` → `deleteBackend {name}`; success/error toasts on
   all mutations; table refreshes via invalidation. **(parity: delete confirm,
   toasts)** **Gate.**
+
+> **Phase 3 notes:**
+> - Reusable `StatusTag` + `ExternalLink` live in `src/components/` (History reuses
+>   both in Phase 4). `ExternalLink` degrades a blank/absent URL to plain text
+>   (Go gap #7).
+> - Active toggle, modal submit, and delete each surface success/error toasts via
+>   the `notify` bridge; all mutations invalidate `['backends']`.
+> - StatusTag color mapping unit-tested (green/red/gold + default fallback).
 
 ## Phase 4 — History (`/history`)
 
