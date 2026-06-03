@@ -2,7 +2,7 @@
 
 **Status:** Locked  
 **Authority:** Team lead sign-off required to change any ruling in sections 1 or 2.  
-**Reference:** `PRD.md`, `docs/topics/do-we-needs-golang-trino-gateway.md`
+**Reference:** `docs/PRD.md`, `docs/topics/do-we-needs-golang-trino-gateway.md`
 
 ---
 
@@ -95,7 +95,7 @@
 
 ## 4. Hard Invariants (Reference)
 
-These seven invariants MUST NOT be violated in any implementation task. See `PRD.md § Hard Invariants` for the authoritative definitions and rationale.
+These seven invariants MUST NOT be violated in any implementation task. See `docs/PRD.md § Hard Invariants` for the authoritative definitions and rationale.
 
 1. Never rewrite response bodies.
 2. Disable redirect-following globally (`CheckRedirect: ErrUseLastResponse`).
