@@ -152,23 +152,34 @@ to the checklist in `PRD.md`.
 
 ## Phase 4 — History (`/history`)
 
-- [ ] **4.1** Filter bar (react-hook-form): RoutedTo `Select` (backend options:
+- [x] **4.1** Filter bar: RoutedTo `Select` (backend options:
   name tag + URL, clearable), User (prefilled from `access.userName`, ADMIN-only
   editable, persisted to sessionStorage `username`), QueryId, Source, Query button.
   **(parity: filter bar, sessionStorage, non-admin readonly)** **Gate.**
-- [ ] **4.2** `queryHistory` query → `POST /webapp/findQueryHistory` sending
+- [x] **4.2** `queryHistory` query → `POST /webapp/findQueryHistory` sending
   `userName`/`backendUrl`/`queryId`/`source`/`page`/`pageSize:15` (reconciliation
   #1–3); server-side pagination; filters reset to page 1. **(parity: pagination,
   filters)** **Gate.**
-- [ ] **4.3** Results `Table`: QueryId (link `{externalUrl}/ui/query.html?{queryId}`),
+- [x] **4.3** Results `Table`: QueryId (link `{externalUrl}/ui/query.html?{queryId}`),
   RoutingGroup (sortable+filterable), Name (resolved via backendUrl→backend mapping),
   RoutedTo (external link), User, Source, QueryText (truncated + tooltip),
   SubmissionTime (zoned, sortable). Resolve `externalUrl` client-side from backend
   list; degrade to plain text if unresolved (Go gap #4). **(parity: all column
   items)** **Gate.**
-- [ ] **4.4** SQL modal: full query text, SQL syntax highlight + line numbers +
+- [x] **4.4** SQL modal: full query text, SQL syntax highlight + line numbers +
   word-wrap, copy-to-clipboard button (label → "Copied!"/"Copy Failed"), opened by
   clicking QueryText. **(parity: SQL modal)** **Gate.**
+
+> **Phase 4 notes:**
+> - Filter bar uses antd `Form` (`layout="inline"`) rather than react-hook-form —
+>   no validation needed for a plain filter row, and antd Form keeps it terse. RHF
+>   stays the form choice for create/edit dialogs (cluster, etc.).
+> - Added **`highlight.js`** (`^11.11.1`) for SQL highlighting in the modal — the
+>   only Phase-4 dependency change; commit the updated `package.json` + lockfile.
+>   SQL is highlighted per-line so line numbers align with word-wrapped content.
+> - `Name`/`RoutedTo`/QueryId-deeplink resolve the backend `externalUrl` client-side
+>   from the backend list (`buildBackendMapping`, unit-tested) since Go leaves the
+>   query record's `externalUrl` blank (gap #4); unresolved → plain text, no dead link.
 
 ## Phase 5 — Routing Rules (`/routing-rules`)
 
