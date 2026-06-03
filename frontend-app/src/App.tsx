@@ -1,12 +1,11 @@
-/**
- * Phase 0 placeholder shell. Real providers, router, and layout land in Phase 1
- * (see docs/TODO.md). This exists only so the scaffold builds and renders.
- */
+import { RouterProvider } from 'react-router-dom';
+import { Providers } from '@/app/Providers';
+import { router } from '@/app/router';
+
 export default function App() {
   return (
-    <main>
-      <h1>Trino Gateway</h1>
-      <p>Web UI scaffold — implementation in progress.</p>
-    </main>
+    <Providers>
+      <RouterProvider router={router} />
+    </Providers>
   );
 }

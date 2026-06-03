@@ -1,0 +1,41 @@
+.main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.card {
+  width: 360px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+}
+
+.logo {
+  width: 64px;
+  height: 64px;
+}
+
+.heading {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.form {
+  width: 100%;
+}
+
+.button {
+  width: 100%;
+}
+
+.spinner {
+  display: flex;
+  justify-content: center;
+  padding: 32px 0;
+}

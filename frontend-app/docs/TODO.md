@@ -44,42 +44,55 @@ to the checklist in `PRD.md`.
 
 ## Phase 1 — Core infrastructure
 
-- [ ] **1.1** Zustand stores: `access` (token, userId, userName, roles[],
+- [x] **1.1** Zustand stores: `access` (token, userId, userName, roles[],
   permissions[], avatar, …; persist to localStorage) with `hasRole`/`hasPermission`;
   `config` (theme auto/light/dark; persist). **Gate.**
-- [ ] **1.2** Typed API client (`src/api/client.ts`): `{code,msg,data}` unwrap,
+- [x] **1.2** Typed API client (`src/api/client.ts`): `{code,msg,data}` unwrap,
   `Authorization: Bearer` + `Content-Language: en_US`, `204→{isExternalRouting:true}`,
   401/403→clear token + expiry signal, network-error message. Unit-test envelope +
   204 + 401 paths. **(parity: error handling, session expiry)** **Gate.**
-- [ ] **1.3** Endpoint modules in `src/api/endpoints/` typed to the Go contract,
+- [x] **1.3** Endpoint modules in `src/api/endpoints/` typed to the Go contract,
   applying the PRD API-reconciliation field fixes (`userName`/`backendUrl`/`pageSize`;
   routingRules verb per `internal/admin/router.go`). Shared `src/types/`. **Gate.**
-- [ ] **1.4** TanStack Query: `QueryClient` + provider; conventions for query keys and
+- [x] **1.4** TanStack Query: `QueryClient` + provider; conventions for query keys and
   mutation invalidation. **Gate.**
-- [ ] **1.5** Providers wrapper: `QueryClientProvider` + antd `ConfigProvider`
+- [x] **1.5** Providers wrapper: `QueryClientProvider` + antd `ConfigProvider`
   (theme algorithm + locale) + `I18nextProvider` + app `ErrorBoundary`
   (shows error + stack). **(parity: ErrorBoundary, antd locale)** **Gate.**
-- [ ] **1.6** i18n bootstrap (react-i18next), `locales/en_US.json`, detection order
-  (localStorage `lang` → navigator → en_US). **(parity: i18n)** **Gate.**
-- [ ] **1.7** Router: `createBrowserRouter` with `basename="/trino-gateway"`, route
+- [x] **1.6** i18n bootstrap (react-i18next), `locales/en_US.ts` (typed), detection
+  order (localStorage `lang` → navigator → en_US). **(parity: i18n)** **Gate.**
+- [x] **1.7** Router: `createBrowserRouter` with `basename="/trino-gateway"`, route
   table (`/`→`/dashboard`, four pages, `*`→idle/404), and guards for `roles` +
   `hasPermission` + `disablePages`. **(parity: routes, sidebar filtering)** **Gate.**
-- [ ] **1.8** App shell `RootLayout`: fixed header (logo, app name, slots for
+- [x] **1.8** App shell `RootLayout`: fixed header (logo, app name, slots for
   timezone/theme/user), collapsible sidebar (240↔60, transition, route-synced active
   item, content margin), responsive. **(parity: shell/layout items)** **Gate.**
-- [ ] **1.9** Theme toggle: auto→light→dark cycle, persisted; apply antd
+- [x] **1.9** Theme toggle: auto→light→dark cycle, persisted; apply antd
   `darkAlgorithm`, update `<meta theme-color>`; expose `useTheme`. **(parity: theme,
   dark mode)** **Gate.**
-- [ ] **1.10** User dropdown + ProfileModal (avatar, username, userId, role tags
+- [x] **1.10** User dropdown + ProfileModal (avatar, username, userId, role tags
   ADMIN=orange/other=blue) + Logout (`POST /logout`, clear token, toast). **(parity:
   user dropdown, profile modal, logout)** **Gate.**
-- [ ] **1.11** TimezoneContext: default browser tz/UTC, `@vvo/tzdb` sorted options,
-  header `Select`; expose `useTimezone` + zoned-format utils (`date-fns-tz`).
-  **(parity: timezone)** **Gate.**
-- [ ] **1.12** Auth/Login page: poll `loginType` (spinner while loading); render
+- [x] **1.11** TimezoneContext: default browser tz/UTC, `@vvo/tzdb` sorted options,
+  header `Select`; expose `useTimezone` + zoned-format utils (Intl-based). **(parity:
+  timezone)** **Gate.**
+- [x] **1.12** Auth/Login page: poll `loginType` (spinner while loading); render
   form / oauth / no-auth variants; `POST /login` (store JWT, fetch userinfo),
   `POST /sso` (redirect), no-auth (readonly password). Consume `token` cookie on
   mount then remove it (OIDC hand-off). **(parity: all 7 auth items)** **Gate.**
+
+> **Phase 1 notes:**
+> - Node 26's experimental `localStorage` global throws unless `--localstorage-file`
+>   is set, which broke zustand's default persist storage under Vitest. Added a
+>   guarded `src/stores/storage.ts` (localStorage → in-memory fallback) used by both
+>   persisted stores.
+> - `date-fns-tz` ended up unused — zoned formatting uses the native `Intl`
+>   `toLocaleString`/`DateTimeFormat` approach (matches the original webapp exactly).
+>   Kept the dep for Phase 2 if richer formatting is needed; otherwise drop it in Phase 6.
+> - Two non-blocking `react-refresh/only-export-components` lint *warnings*
+>   (router.tsx, timezone.tsx) — HMR hints, 0 errors. Quieted in Phase 6 polish.
+> - Main JS chunk ~1.16 MB (antd + echarts + router); per-page routes are already
+>   lazy/code-split. `manualChunks` vendor splitting deferred to Phase 6.
 
 ## Phase 2 — Dashboard (`/dashboard`)
 
