@@ -21,7 +21,7 @@
 ## Phase 3: Architecture Design + Targeted Studies
 
 - [x] Task 10 — Architect writes `phase2-gate-responses.architect.md` (library decisions, DI stance, streaming/oracle/cookie rulings, 6th hard invariant, sequencing constraints; includes ruling on gRPC in v1 vs. Non-Groomed)
-- [x] Task 11 — Go-implementer writes `SCOPE.md` (locked scope, deferred scope, reversal cost per item; team-lead sign-off required to change any ruling)
+- [x] Task 11 — Go-implementer writes `docs/SCOPE.md` (locked scope, deferred scope, reversal cost per item; team-lead sign-off required to change any ruling)
 - [x] Task 12 — Go-implementer writes `gateway-cookies-and-sticky-routing.go-implementer.md` (cookie design: HMAC-SHA256 wire-compat with Java `GatewayCookie`, `wireCompat` config flag, `/v1/spooled/*` + `/v1/spooled/ack` sticky routing via `TG.*` cookie; required before proxy implementation starts)
 - [x] Task 13 — trino-expert studies `/v1/spooled/*` URL structure in Trino source (`docs/studies/trino/spooled-segment-protocol.trino-expert.md`): token format, whether queryId is encoded, redirect chain, and whether cookie is the only viable sticky mechanism
 - [x] Task 14 — go-implementer studies `GatewayCookie.java` in depth (`docs/studies/trino-gateway/gateway-cookie-internals.go-implementer.md`): HMAC-SHA256 payload format, `routingPaths` matching logic, cookie issue/validate/invalidate lifecycle; feeds into Task 12
@@ -194,13 +194,13 @@ Each review task produces a document in `docs/studies/`. Review tasks read the t
   - Output table feeds directly into Task 47 (admin E2E) and Task 48 (webapp E2E) as the authoritative checklist
 
 - [x] Task 33 — **go-qa proxy seam gap analysis** (`docs/studies/both/proxy-seam-gap-analysis.go-qa.md`)
-  - Map all 12 hard invariants from `USE_STORIES.md § Hard Invariants` to existing tests in `internal/proxy/proxy_test.go`, `internal/e2e/proxy_e2e_test.go`, and `cmd/goway-diff-harness/testdata/scenarios/`
+  - Map all 12 hard invariants from `docs/USE_STORIES.md § Hard Invariants` to existing tests in `internal/proxy/proxy_test.go`, `internal/e2e/proxy_e2e_test.go`, and `cmd/goway-diff-harness/testdata/scenarios/`
   - For each invariant: COVERED (cite test name) / PARTIALLY-COVERED (explain gap) / NOT-COVERED
   - Identify which invariants (#4 bounded buffering, #7 hop-by-hop, #8 X-Forwarded-For append, #9 externalHeaders REPLACE, #11 readyz timing, #12 three clients) have no black-box E2E test
   - Output feeds into Task 54 (hard invariants E2E) as the test specification
 
 - [x] Task 34 — **qa-tech-lead E2E coverage gap document** (`docs/studies/both/e2e-coverage-plan.qa-tech-lead.md`)
-  - Map every acceptance criterion in `USE_STORIES.md` §1–§7 to: COVERED-BY-EXISTING-TEST (cite) / PLANNED-IN-TASK-N / NOT-COVERED
+  - Map every acceptance criterion in `docs/USE_STORIES.md` §1–§7 to: COVERED-BY-EXISTING-TEST (cite) / PLANNED-IN-TASK-N / NOT-COVERED
   - Identify acceptance criteria not verifiable via black-box (binary + HTTP) and propose white-box fallbacks
   - Confirm build-tag strategy (`//go:build e2e`) and CI integration points for Phase 8 tests
   - Sign-off document: Phase 8 may not begin until this document is committed
@@ -428,7 +428,7 @@ All Phase 8 tests carry `//go:build e2e`, are in `internal/e2e/`, use the `Harne
 - [x] `TestE2E_Cookie_WireCompat_GoldenBytes` — `cookie.wireCompat: true`; issue a cookie; decode base64; verify JSON payload field order and HMAC input match golden file at `testdata/cookie_wire_compat.golden` (Hard Invariant #10) — golden pinned by Go implementation (key-sorted; runtime fields normalized to `<runtime>`); replace with Java-captured shape in follow-up
 - [x] `go vet ./...` + `golangci-lint run ./...` pass
 
-#### Task 54 — E2E: Hard invariants black-box (all 12 from USE_STORIES.md)
+#### Task 54 — E2E: Hard invariants black-box (all 12 from docs/USE_STORIES.md)
 
 One test per invariant, verifiable solely through the HTTP interface. Informed by the gap analysis from Task 33.
 

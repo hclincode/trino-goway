@@ -113,6 +113,6 @@ Any change to sections 1 or 2 requires all three of the following in the same gi
 
 1. **Written rationale** in a new file under `docs/topics/` documenting the change, operator demand evidence, and implementation cost.
 2. **Team-lead acknowledgment** in the git commit message explicitly referencing the `docs/topics/` discussion doc by filename.
-3. **Updated `SCOPE.md`** reflecting the new ruling.
+3. **Updated `docs/SCOPE.md`** reflecting the new ruling.
 
 Changes that arrive without all three artifacts will be reverted.

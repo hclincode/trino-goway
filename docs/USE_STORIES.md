@@ -196,7 +196,7 @@ deploying a separate routing service so that the gateway is usable out of the bo
 
 - If neither `routing.external.url` nor `routing.external.grpcAddr` is configured, the
   external call is skipped and every request is routed to `routing.defaultGroup`.
-- The annotated `config.example.yaml` documents this fallback so operators know it is a
+- The annotated `configs/config.example.yaml` documents this fallback so operators know it is a
   supported deployment mode.
 
 ---
@@ -423,7 +423,7 @@ defaults so that I can boot the gateway without copying a 200-line example file.
 **Acceptance Criteria**
 
 - The gateway reads `--config <path>` (default `config.yml`) at startup.
-- Every section has documented defaults (see `config.example.yaml`): proxy `:8080` /
+- Every section has documented defaults (see `configs/config.example.yaml`): proxy `:8080` /
   `1 MiB` / `30s`; admin `:8090`; monitor `30s` / `5s`; routing `EXTERNAL` / `1s`; cookie
   `10m` / `wireCompat: true`; auth `NOOP`; OIDC `jwksTtlSecs: 300`; LDAP `userAttr: uid`.
 - Duration strings use Go's format (`30s`, `1m`, `1h30m`); size strings accept

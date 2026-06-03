@@ -124,11 +124,11 @@ go build ./cmd/goway-diff-harness
 Copy the annotated example and edit for your environment:
 
 ```bash
-cp config.example.yaml config.yaml
+cp configs/config.example.yaml config.yaml
 $EDITOR config.yaml
 ```
 
-See [config.example.yaml](config.example.yaml) for all fields with inline documentation. Minimum required fields for a single-cluster deployment:
+See [configs/config.example.yaml](configs/config.example.yaml) for all fields with inline documentation. Minimum required fields for a single-cluster deployment:
 
 ```yaml
 db:
