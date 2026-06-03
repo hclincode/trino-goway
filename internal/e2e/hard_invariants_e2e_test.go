@@ -249,7 +249,7 @@ func TestE2E_Inv7_HopByHopStripped_BothDirections(t *testing.T) {
 // TestE2E_ForwardedHeaders_XForwardedForAppends in proxy_protocol_e2e_test.go
 // (Task 39): a pre-existing X-Forwarded-For value must be appended-to, not
 // replaced. This minimal re-run keeps the invariant-traceability matrix
-// (USE_STORIES.md §Hard Invariants) mapped to a TestE2E_Inv8_* symbol.
+// (docs/USE_STORIES.md §Hard Invariants) mapped to a TestE2E_Inv8_* symbol.
 func TestE2E_Inv8_XForwardedForAppends(t *testing.T) {
 	h := harness.New(t)
 	fake := h.AddBackend(t, "trino-inv8", "default")

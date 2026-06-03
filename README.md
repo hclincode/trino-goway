@@ -2,7 +2,7 @@
 
 A Go rewrite of [trino-gateway](https://github.com/trinodb/trino-gateway) — a reverse proxy and load balancer for one or more [Trino](https://trino.io) clusters.
 
-See [USE_STORIES.md](USE_STORIES.md) for what the gateway does and the guarantees it provides.
+See [docs/USE_STORIES.md](docs/USE_STORIES.md) for what the gateway does and the guarantees it provides.
 
 ---
 
