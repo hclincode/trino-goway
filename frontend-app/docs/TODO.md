@@ -19,18 +19,28 @@ to the checklist in `PRD.md`.
 
 ## Phase 0 — Scaffold
 
-- [ ] **0.1** Init pnpm project; create Vite + React 19 + TS app under `frontend-app/`.
+- [x] **0.1** Init pnpm project; create Vite + React 19 + TS app under `frontend-app/`.
   Set Vite `base: '/trino-gateway/'`. **Gate.**
-- [ ] **0.2** TypeScript strict config (`strict: true`, `noUncheckedIndexedAccess`,
+- [x] **0.2** TypeScript strict config (`strict: true`, `noUncheckedIndexedAccess`,
   path alias `@/` → `src/`). **Gate.**
-- [ ] **0.3** ESLint flat config (`typescript-eslint`, `react-hooks`, `jsx-a11y`) +
+- [x] **0.3** ESLint flat config (`typescript-eslint`, `react-hooks`, `jsx-a11y`) +
   Prettier; add `lint`, `lint:fix`, `format` scripts. **Gate.**
-- [ ] **0.4** Vitest + React Testing Library + jsdom; add `test`/`test:watch`; one
+- [x] **0.4** Vitest + React Testing Library + jsdom; add `test`/`test:watch`; one
   trivial passing smoke test. **Gate.**
-- [ ] **0.5** Define all DoD scripts in `package.json` exactly as in CONVENTIONS
+- [x] **0.5** Define all DoD scripts in `package.json` exactly as in CONVENTIONS
   (`dev`, `build`, `preview`, `typecheck`, `lint`, `test`). **Gate.**
-- [ ] **0.6** `.gitignore` (node_modules, dist, local env); **commit
+- [x] **0.6** `.gitignore` (node_modules, dist, local env); **commit
   `pnpm-lock.yaml`**; copy `public/logo.svg` + favicon from original assets. **Gate.**
+
+> **Phase 0 toolchain notes (resolved during scaffold):**
+> - **vitest pinned to v3** (not v2): vitest v2 bundles `vite@5` and its
+>   `vitest/config` `defineConfig` is typed against Vite 5's `Plugin`, which
+>   conflicts with the installed `vite@6` plugin types under `tsc -b`. v3 is built
+>   against Vite 6, deduping the tree to a single `vite@6.4.3`.
+> - `vite.config.ts` imports `defineConfig` from **`vitest/config`** (not `vite`)
+>   so the `test` block type-checks.
+> - pnpm 11 records the esbuild build-script approval in **`pnpm-workspace.yaml`**
+>   (`allowBuilds: { esbuild: true }`) — commit it alongside `pnpm-lock.yaml`.
 
 ## Phase 1 — Core infrastructure
 
