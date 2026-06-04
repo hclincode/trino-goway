@@ -1,0 +1,14 @@
+# Compiled binaries / build output
+/bin/
+*.exe
+*.test
+*.out
+
+# Coverage
+coverage.*
+*.coverprofile
+
+# Local env / editor
+.env
+.env.local
+.DS_Store
