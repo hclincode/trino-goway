@@ -73,9 +73,21 @@ Implements the `TrinoGatewayRouter` service wire and `grpc.health.v1.Health`. No
   ```
   `MethodConfig`: `Type string`, `Refresh Duration`, `Program string` (inline), `File string` (path); union — only one of Program/File non-empty
   `Load(path string) (*Config, error)` via `gopkg.in/yaml.v3`; `Validate()` — addr non-empty, defaultRoutingGroup non-empty, each method has exactly one of Program/File
-- [ ] `routing-service/internal/config/config_test.go` — table-driven YAML round-trips; validation errors
+- [ ] `routing-service/internal/config/config_test.go` — table-driven:
+  - Valid YAML with both `program:` and `file:` method variants round-trips correctly
+  - Missing `addr` → `Validate()` error
+  - Empty `default_routing_group` → `Validate()` error
+  - Method with both `program` and `file` set → `Validate()` error
+  - Method with neither `program` nor `file` → `Validate()` error
+  - Unknown method `type` in config → no error at load time (registry decides at build time, not config parse)
 - [ ] `routing-service/cmd/routing-service/main.go` — flags: `--config` (path, required), `--log-level`; compose `Config` + `Server`; SIGTERM/SIGINT → `Stop()` with 30 s deadline; startup log: addr, default group, method count
-- [ ] `routing-service/internal/server/server_test.go` — in-process server (`bufconn`): `Route` returns default group; health returns `NOT_SERVING` before ready, `SERVING` after `engine.SetReady(true)`; `GracefulStop` drains an in-flight RPC before returning
+- [ ] `routing-service/internal/server/server_test.go` (`bufconn`-based, `go test -race`):
+  - Health `NOT_SERVING` before `engine.SetReady(true)`; `SERVING` immediately after
+  - `Watch` streams `NOT_SERVING` → `SERVING` transition without polling (assert the stream delivers the second status within 100 ms of `SetReady`)
+  - `Route` with `is_new_query_submission=false` → `RouteResponse{RoutingGroup: ""}` returned immediately; no call to `Pipeline.Evaluate` (assert via a spy/counter)
+  - `Route` with `is_new_query_submission=true` → returns `default_routing_group` (stub phase)
+  - `GracefulStop` with an in-flight RPC: start a slow `Route` call that blocks 50 ms; call `Stop()`; assert the in-flight call completes before `Stop()` returns (not hard-killed)
+  - `goleak.VerifyTestMain` — no goroutine leaks after server start/stop
 - [ ] `go vet ./...` + `golangci-lint run ./...` pass
 - [ ] **DoD:** `go build ./cmd/routing-service` produces a static binary; gateway configured with `routing.external.grpcAddr: localhost:9001` routes to `default_routing_group`; `grpcurl -plaintext localhost:9001 grpc.health.v1.Health/Check` returns `SERVING`
 
@@ -122,10 +134,25 @@ Implements the extensibility core. No method logic yet — establishes the inter
   - `Evaluate(ctx context.Context, in *RouteInput) (*Decision, error)` — iterate methods in order; first `Decision.Decided=true` wins; if none decide, return `Decision{RoutingGroup: defaultGroup, Decided: false}`; any method `Evaluate` error → log warn + skip that method (never propagate as gRPC error)
   - `Ready() bool` — true once at least one method is loaded or the pipeline has zero methods (pure-default mode)
 - [ ] `routing-service/internal/engine/input.go` — `FromProto(req *routerpb.RouteRequest) *RouteInput` — maps proto fields to `RouteInput`; `ClientTags` from `req.ClientTags` (pre-split by gateway); `Source` from `req.TrinoSource`; handles nil `TrinoQueryProperties` / `TrinoRequestUser` safely
-- [ ] `routing-service/internal/engine/pipeline_test.go` — table-driven: first-decides wins; skip-on-error; all-defer returns default; nil methods list (pure-default); `Ready()` transitions
+- [ ] `routing-service/internal/engine/pipeline_test.go` — table-driven (`go test -race`):
+  - Two methods: first returns `Decided=true` with group `"etl"` → pipeline returns `"etl"`; second method is never called (assert call count via spy)
+  - First method returns error → skipped; second method decides `"batch"` → pipeline returns `"batch"`; error is logged, not surfaced to caller
+  - Both methods return `Decided=false` → pipeline returns `Decision{RoutingGroup: defaultGroup, Decided: false}`
+  - Empty methods slice → returns `defaultGroup` immediately
+  - `Ready()` is `false` before any method loads; becomes `true` after first successful `LoadConfig`; stays `true` if a subsequent reload fails
+  - Pipeline ordering: three methods returning `Decided=true` in succession; assert only the first is called
+- [ ] `routing-service/internal/engine/input_test.go` — `FromProto` mapping:
+  - `req.TrinoSource = "airflow"` → `RouteInput.Source == "airflow"`
+  - `req.ClientTags = ["tag-a", "tag-b"]` → `RouteInput.ClientTags == ["tag-a", "tag-b"]`
+  - `req.TrinoRequestUser.User = "alice"` → `RouteInput.User == "alice"`
+  - `req.TrinoQueryProperties.DefaultCatalog = "hive"` → `RouteInput.Catalog == "hive"`
+  - `req.TrinoQueryProperties.Body = "SELECT 1"` → `RouteInput.Body == "SELECT 1"`
+  - Nil `TrinoQueryProperties` → all fields zero-value, no panic
+  - Nil `TrinoRequestUser` → `User == ""`, no panic
+  - `is_new_query_submission=false` → `RouteInput.IsNew == false`
 - [ ] Wire `Pipeline.Evaluate` into `server.Route` (replace the stub from Task RS-2); pass `engine.Ready()` to `healthServer`
 - [ ] `go vet ./...` + `golangci-lint run ./...` pass
-- [ ] **DoD:** pipeline unit tests green; `Route` RPC now drives the method chain; gateway can be pointed at the service and routed deterministically
+- [ ] **DoD:** pipeline unit tests green; `FromProto` correctly maps all PRD §4.1 fields; `Route` RPC now drives the method chain; gateway can be pointed at the service and routed deterministically
 
 ---
 
@@ -139,15 +166,20 @@ Implements the extensibility core. No method logic yet — establishes the inter
   - `Evaluate(ctx, in)` — `expr.Run(prog, buildEnv(in))`; result string: non-empty → `Decision{RoutingGroup: result, Decided: true}`; empty string → `Decision{Decided: false}`; any `expr.Run` panic/error → `Decision{Decided: false}` + log warn
   - `buildEnv(in *RouteInput) map[string]any` — expose: `request` struct with fields `source`, `client_tags`, `user`, `catalog`, `schema`, `method`, `uri`, `remote_addr`, `body`, `is_new`; plus `hashPct` as a registered function: `hashPct(s string) int` — FNV-1a hash of `s` modulo 100, deterministic (for canary splits)
   - No I/O, no goroutines, no network in `buildEnv`; only pure functions registered
-- [ ] `routing-service/internal/engine/providers/expr/provider_test.go` — table-driven:
-  - `source == "airflow" ? "etl" : ""` routes airflow to etl, others defer
-  - `"tier=premium" in client_tags ? "premium" : ""` tag matching
-  - `hashPct(user) < 5 ? "canary" : "prod"` deterministic split (assert same user always same bucket)
-  - Invalid program → `LoadConfig` returns error, old program still serves
-  - Runtime panic in expr → `Decided: false`, no crash
+- [ ] `routing-service/internal/engine/providers/expr/provider_test.go` — table-driven (`go test -race`):
+  - `source == "airflow" ? "etl" : ""` + input `{source:"airflow"}` → `Decision{RoutingGroup:"etl", Decided:true}`
+  - Same program + input `{source:"superset"}` → `Decision{Decided:false}`
+  - `"tier=premium" in client_tags ? "premium" : ""` + `{client_tags:["tier=premium"]}` → `Decided:true`, group `"premium"`
+  - `hashPct(user) < 5 ? "canary" : "prod"` — assert same `user` string always maps to the same bucket across 1000 calls (FNV-1a determinism); assert that for a set of 1000 distinct users, roughly 4–6% map to `< 5` (uniform distribution sanity; use a wide tolerance)
+  - Program returning an integer (type mismatch) → `LoadConfig` returns error, no program activated
+  - Program with syntax error → `LoadConfig` returns error
+  - After a failed `LoadConfig`, old program is still served: load a valid program first; then attempt a bad reload; assert the valid program's decision still works
+  - Runtime panic in `expr.Run` (simulated via a program that panics when called) → `Evaluate` returns `Decision{Decided:false}`, no goroutine crash
+  - `is_new=false` passed to `buildEnv`: assert `request.is_new == false` is accessible in the expression
+- [ ] `routing-service/internal/engine/providers/expr/benchmark_test.go` — `BenchmarkExprEvaluate` using a realistic 3-branch program; assert p99 < 50 µs via `testing.B.ReportAllocs()` and a manual latency histogram over 10 000 iterations (not just `b.N` — use a time-bounded loop and assert the 99th percentile directly)
 - [ ] Register `ExprProvider` in `routing-service/cmd/routing-service/main.go` init block: `registry.Register("expr", func() engine.RoutingMethod { return expr.New() })`
 - [ ] `go vet ./...` + `golangci-lint run ./...` pass
-- [ ] **DoD:** `expr` method routes correctly per tests; `LoadConfig` errors leave old program live
+- [ ] **DoD:** all table cases pass; type-mismatch and syntax-error programs are rejected at load; keep-last-good verified; `hashPct` is deterministic and approximately uniform; benchmark p99 < 50 µs
 
 ### Task RS-5 — `script` provider (Starlark)
 
@@ -158,17 +190,28 @@ Implements the extensibility core. No method logic yet — establishes the inter
   - `StarlarkRouteInput` — `starlark.Value` implementing `starlark.HasAttrs`: exposes read-only attrs `source`, `client_tags` (Starlark list of strings), `user`, `catalog`, `schema`, `method`, `uri`, `remote_addr`, `body`, `is_new`; `Freeze()` is a no-op (already immutable); no I/O methods exposed
   - Predeclared names injected into the Starlark universe: `hashPct` (same semantics as expr provider — FNV-1a mod 100, deterministic)
   - Never expose: `file`, `open`, any `os.*`, any network primitives; the sandbox is structural (no stdlib; only explicit predeclared names)
-- [ ] `routing-service/internal/engine/providers/script/provider_test.go` — table-driven:
-  - `def route(req): return "etl" if req.source == "airflow" else None` routes airflow, defers others
-  - `def route(req): return "canary" if hashPct(req.user) < 5 else "prod"` — deterministic bucket
-  - Infinite loop `def route(req): [x for x in range(10**9)]` — `SetMaxSteps` fires, returns `Decided: false` within < 5 ms
-  - Script with syntax error → `LoadConfig` returns error, old script still serves
-  - Script `return None` → `Decided: false` (not an error)
-  - Script `return ""` → `Decided: false`
-  - Script runtime error (`1/0`) → `Decided: false`, no crash
+- [ ] `routing-service/internal/engine/providers/script/provider_test.go` — table-driven (`go test -race`):
+  - `def route(req): return "etl" if req.source == "airflow" else None` + `{source:"airflow"}` → `Decided:true`, group `"etl"`
+  - Same script + `{source:"superset"}` → `Decided:false`
+  - `hashPct` determinism: same `req.user` always yields the same bucket across 1000 Starlark calls
+  - `return None` → `Decided:false`, no error
+  - `return ""` → `Decided:false`, no error
+  - Runtime error `1/0` → `Decided:false`, no panic, error logged
+  - Syntax error in script → `LoadConfig` returns error; provider returns no program; subsequent `Evaluate` returns `Decided:false` (not a crash)
+  - Keep-last-good: load valid script A; attempt reload of syntax-error script B; assert script A's decision still works
+  - `is_new` and `client_tags` attrs accessible and correct in Starlark (`req.is_new == True`, `"tag-a" in req.client_tags`)
+  - **Step-limit (must assert timing):** `def route(req): [i for i in range(10**9)]` — `Evaluate` returns `Decided:false` within **< 5 ms** wall clock (use `time.Now()` in the test; assert elapsed < 5 ms)
+  - **Deadline propagation:** pass a `context.WithTimeout(ctx, 1ms)` to `Evaluate` for a slow script; assert `Decided:false` returned and the `thread.Cancel` goroutine exits cleanly (goleak)
+  - **Sandbox negative tests** (each is a separate table row; all must compile/run without crashing the test process; all must return `Decided:false`):
+    - `def route(req): load("os", "getenv"); return "x"` — `load()` not permitted; `LoadConfig` or `Evaluate` returns error
+    - `def route(req): open("/etc/passwd")` — `open` not defined; `EvalError` → `Decided:false`
+    - `def route(req): import sys` — `import` is not Starlark syntax; `LoadConfig` returns error
+    - `def route(req): [1]*10**8` — large list allocation; step limit fires before OOM
+    - `def route(req): x = {}; [x.update({i:i}) for i in range(10**7)]` — step limit fires
+- [ ] `routing-service/internal/engine/providers/script/benchmark_test.go` — `BenchmarkStarlarkEvaluate` with a realistic 4-branch `route(req)` function; assert p99 < 1 ms via a time-bounded 10 000-iteration loop with latency histogram
 - [ ] Register `ScriptProvider` in `main.go` init: `registry.Register("script", func() engine.RoutingMethod { return script.New() })`
 - [ ] `go vet ./...` + `golangci-lint run ./...` pass
-- [ ] **DoD:** Starlark provider routes correctly; step-limit test proves CPU-bound scripts cannot hang the RPC; sandboxing test confirms no stdlib escape
+- [ ] **DoD:** all table cases pass; step-limit test terminates in < 5 ms; all 5 sandbox-negative inputs are handled without crashing; keep-last-good and deadline propagation verified; benchmark p99 < 1 ms
 
 ---
 
@@ -187,9 +230,15 @@ Depends on RS-3 (pipeline). Can start after RS-3.
     3. If any step fails: log error with diff summary (old config hash vs new), increment `config_reload_errors_total`, emit structured audit event `{trigger: "file_change", result: "error", diff: ...}`, **keep the current pipeline live** (last-known-good)
     4. If all succeed: atomically swap the pipeline's method slice; increment `config_reload_success_total`; emit audit event `{result: "ok", new_hash: ...}`
   - `Stop()` — close the fsnotify watcher
-- [ ] `routing-service/internal/reload/watcher_test.go` — write a valid config file; assert initial load; overwrite with invalid config; assert old pipeline still serves; overwrite with valid config; assert new pipeline activates; goleak clean
+- [ ] `routing-service/internal/reload/watcher_test.go` (`go test -race`):
+  - Write a valid config file with an `expr` method routing `source=="a"→"group-a"`; start watcher; assert pipeline routes `"a"` → `"group-a"`
+  - Overwrite with an **invalid** config (syntax error); wait > 100 ms (debounce); assert pipeline **still** routes `"a"` → `"group-a"` (last-known-good); assert `config_reload_errors_total` incremented by 1; assert structured audit event `{result: "error"}` emitted
+  - Overwrite with a valid config routing `"a"` → `"group-b"`; wait for debounce + reload; assert pipeline now routes `"a"` → `"group-b"`; assert `config_reload_success_total` incremented; assert audit event `{result: "ok"}`
+  - **Concurrent-traffic test:** start 10 goroutines each making 100 `Evaluate` calls in a loop; mid-way trigger a valid config reload; assert no call returns an error and no goroutine panics (atomic swap must never expose a nil pipeline mid-flight)
+  - **Debounce test:** write 5 rapid file-write events within 50 ms (well within the 100 ms debounce window); assert `reload()` is called exactly once after the debounce settles (use a spy counter)
+  - `goleak.VerifyTestMain` — fsnotify goroutine and reload goroutine must not leak after `Stop()`
 - [ ] `go vet ./...` + `golangci-lint run ./...` pass
-- [ ] **DoD:** file change activates new config; invalid file never disrupts live traffic; audit events emitted
+- [ ] **DoD:** valid change atomically swaps pipeline; invalid change keeps last-good + records error metric + emits audit event; concurrent traffic unaffected during reload; debounce coalesces rapid writes to one reload; no goroutine leaks
 
 ### Task RS-7 — Dry-run CLI tool (`routing-service-validate`)
 
@@ -216,9 +265,14 @@ Depends on RS-3 (pipeline). Can start after RS-3.
 - [ ] `routing-service/internal/server/server.go` — expose a `DisableMethod`/`EnableMethod` gRPC admin method (unary, admin-only placeholder; no auth in Phase 1 — document as "must be firewalled; mTLS required in Phase 2"):
   - `rpc DisableMethod(DisableMethodRequest) returns (DisableMethodResponse)` — added to a new `RoutingServiceAdmin` service in `router.proto` (separate service, separate registration)
   - `DisableMethodRequest { string type = 1; }`, `DisableMethodResponse { bool ok = 1; string message = 2; }`
-- [ ] `routing-service/internal/engine/pipeline_test.go` — extend: disable `expr`; pipeline falls through to `script`; re-enable; `expr` decides again; assert sub-millisecond propagation (no sleep needed — atomic)
+- [ ] `routing-service/internal/engine/pipeline_test.go` — extend with kill-switch cases (`go test -race`):
+  - Pipeline with `expr` then `script`; `expr` decides `"etl"`; `DisableMethod("expr")`; next call: `expr` is skipped, `script` decides; assert no restart needed (call happens in same process, no sleep)
+  - `DisableMethod("expr")`; verify `DisabledMethods()` returns `["expr"]`; `EnableMethod("expr")`; verify `DisabledMethods()` returns `[]`; assert `expr` decides again on the next call
+  - Disable both methods; assert pipeline returns `defaultGroup` on the next call
+  - Disable a method that does not exist (unknown type): `DisableMethod("unknown")` is a no-op and does not panic
+  - **Propagation latency:** call `DisableMethod`, then immediately (same goroutine, no sleep) call `Evaluate`; assert the disabled method is not invoked — the atomic check takes effect within the same call (no sleep needed because it's the same goroutine post-disable)
 - [ ] `go vet ./...` + `golangci-lint run ./...` pass
-- [ ] **DoD:** `DisableMethod("script")` over gRPC stops the Starlark provider without restart; `EnableMethod` restores it
+- [ ] **DoD:** `DisableMethod` takes effect on the very next `Evaluate` call; `EnableMethod` restores it; unknown type is a no-op; `DisabledMethods()` reflects current state accurately
 
 ---
 
@@ -243,9 +297,23 @@ Depends on RS-2 (server), RS-3 (pipeline). Can be partially started after RS-2.
 - [ ] `routing-service/internal/tracing/tracing.go` — OTel setup:
   - `Init(cfg TracingConfig) (*trace.TracerProvider, error)` — OTLP exporter (endpoint configurable; disabled if empty); resource with `service.name=routing-service`
   - In `server.Route`: `tracer.Start(ctx, "TrinoGatewayRouter/Route")`; propagate incoming gRPC trace context via `otelgrpc.UnaryServerInterceptor`; add span attrs: `routing.group`, `routing.source`, `routing.method_type`
-- [ ] `routing-service/internal/metrics/metrics_test.go` — after N `Route` calls: counters match; histogram observed; fallback counter increments on method skip
+- [ ] `routing-service/internal/metrics/metrics_test.go` (`go test -race`):
+  - Send 10 `Route` calls all deciding via `expr` method, group `"etl"` → assert `routing_service_requests_total{method_type="expr",routing_group="etl",outcome="decided"}` == 10
+  - Send 5 calls where both methods skip → assert `routing_service_fallback_total` == 5 and `routing_service_requests_total{outcome="fallback"}` == 5
+  - Send 3 calls where a method returns an error → assert `routing_service_requests_total{outcome="error"}` == 3 and those 3 are NOT also counted as `fallback`
+  - Assert `routing_service_decision_duration_seconds` histogram has observations (bucket counts > 0) after any `Route` call
+  - Trigger a config reload success → assert `routing_service_config_reload_total{result="ok"}` increments; trigger a reload failure → assert `routing_service_config_reload_total{result="error"}` increments
+  - `DisableMethod("expr")` → assert `routing_service_method_disabled{type="expr"}` gauge == 1; `EnableMethod` → gauge == 0
+  - `/metrics` HTTP endpoint returns 200, `Content-Type` contains `application/openmetrics-text` or `text/plain`, body parses cleanly with `github.com/prometheus/common/expfmt`
+- [ ] `routing-service/internal/logging/decision_test.go`:
+  - Call `DecisionLogger` with a `RouteInput` where `Body = "SELECT * FROM secrets"` → assert logged `body` field is `sha256("SELECT * FROM secrets")[:8]`, NOT the raw SQL
+  - Call with `isFallback=true` → `ShouldLog` returns `true` always
+  - Call with `isFallback=false` 1000 times → assert `ShouldLog` returns `true` for approximately 8–12% of calls (10% rate with wide tolerance)
+  - Log fields present: `rule_id`, `input_attributes`, `routing_group`, `latency_ms`, `config_version_hash`
+- [ ] `routing-service/internal/tracing/tracing_test.go`:
+  - Start an in-memory OTel span exporter; run a `Route` call with a parent trace context injected via gRPC metadata; assert the emitted span has `routing.group`, `routing.source`, `routing.method_type` attributes set and parent span ID matches the injected context
 - [ ] `go vet ./...` + `golangci-lint run ./...` pass
-- [ ] **DoD:** `curl :9091/metrics` returns OpenMetrics text with all named families; decision logs at INFO on fallback; `grpcurl` trace propagates span to collector
+- [ ] **DoD:** all counter/histogram assertions pass; body redaction verified; fallback always-logs verified; parent trace context propagation verified; `/metrics` endpoint serves OpenMetrics text
 
 ---
 
@@ -319,15 +387,23 @@ starlark-test routes.star '{"source":"airflow"}' --max-steps 100000
 ```
 
 - [ ] `routing-service/tools/starlark-test/main.go` — implement the interface above; detect `arg2` as JSON file vs inline by checking whether the value is a valid file path that exists; build a `RouteInput` from the parsed JSON; invoke `ScriptProvider.Evaluate` directly (reuse the production provider, same sandbox + limits); single-input: print key:value lines; batch (`--samples`): print table; exit 0 on success, non-zero on script error, step limit, or expectation miss
-- [ ] `routing-service/tools/starlark-test/main_test.go`:
-  - Single-input valid script + inline JSON → correct group, exit 0
-  - Single-input step-limit script → `STEP_LIMIT` in output, exit non-zero
-  - Single-input missing `route` function → `ERROR: ...` in output, exit non-zero
-  - Batch `--samples` + matching `--expect` → exit 0
-  - Batch `--samples` + mismatched `--expect` → exit non-zero
+- [ ] `routing-service/tools/starlark-test/main_test.go` — table-driven, each case run via `exec.Command` or by calling `main` with captured stdout:
+  - **Exit-code matrix:**
+    | scenario | expected exit | expected status in output |
+    |---|---|---|
+    | valid script + matching input | 0 | `OK` |
+    | valid script + non-matching input | 0 | `DEFERRED` |
+    | step-limit script + any input | non-zero | `STEP_LIMIT` |
+    | script missing `route` function | non-zero | `ERROR: ...` |
+    | script syntax error | non-zero | `ERROR: ...` |
+    | `--samples` + `--expect` all match | 0 | table, all `OK` |
+    | `--samples` + `--expect` one mismatch | non-zero | mismatch row highlighted |
+  - **Output == production provider output:** run the same input through `ScriptProvider.Evaluate` directly in the test; assert `starlark-test`'s printed group exactly matches the provider's `Decision.RoutingGroup` (or `(deferred)` if `Decided=false`)
+  - **Step-limit timing:** step-limit script exits within < 500 ms wall clock (generous for CI; production contract is < 5 ms per RS-5, but CI process overhead allowed here)
+  - `--max-steps 1` forces step limit on any non-trivial script; assert exit non-zero
 - [ ] `go build ./tools/starlark-test` produces a static binary
 - [ ] `go vet ./...` + `golangci-lint run ./...` pass
-- [ ] **DoD:** `starlark-test routes.star '{"source":"airflow","is_new":true}'` prints `group: etl`, exit 0; step-limit script exits non-zero within < 100 ms; `--samples`/`--expect` batch mode usable in CI without a running service; uses the same provider code path as production
+- [ ] **DoD:** exit-code matrix verified; tool output matches production provider for same input; step-limit enforced; `--samples`/`--expect` CI mode tested end-to-end
 
 ### Task RS-11 — `expr-test` CLI tool
 
@@ -372,14 +448,23 @@ expr-test routes.expr ./request.json
 ```
 
 - [ ] `routing-service/tools/expr-test/main.go` — implement the interface above; use `ExprProvider.LoadConfig` to compile (catches type errors at load time, same as production) and `ExprProvider.Evaluate` to run; single-input: print key:value; batch: print table; exit codes match `starlark-test`
-- [ ] `routing-service/tools/expr-test/main_test.go`:
-  - `--program 'source == "airflow" ? "etl" : ""'` + `'{"source":"airflow"}'` → `group: etl`, exit 0
-  - Same program + `'{"source":"superset"}'` → `DEFERRED`, exit 0
-  - Invalid program → `COMPILE_ERROR` in output, exit non-zero
-  - Batch `--samples` + matching `--expect` → exit 0; mismatch → exit non-zero
+- [ ] `routing-service/tools/expr-test/main_test.go` — table-driven, same structure as `starlark-test`:
+  - **Exit-code matrix:**
+    | scenario | expected exit | expected status in output |
+    |---|---|---|
+    | valid program + matching input | 0 | `OK` |
+    | valid program + non-matching input | 0 | `DEFERRED` |
+    | program with compile/type error | non-zero | `COMPILE_ERROR: ...` |
+    | program returning integer (type mismatch) | non-zero | `COMPILE_ERROR: ...` |
+    | program runtime error | non-zero | `RUNTIME_ERROR: ...` |
+    | `--samples` + `--expect` all match | 0 | table, all `OK` |
+    | `--samples` + `--expect` one mismatch | non-zero | mismatch row highlighted |
+  - **Output == production provider output:** run the same program + input through `ExprProvider.Evaluate` directly; assert `expr-test` printed group matches `Decision.RoutingGroup` exactly
+  - `--program` inline takes precedence over `arg1` file when both provided; assert error if neither is given
+  - `arg1` pointing to a non-existent file → non-zero exit, `ERROR: ...` in output
 - [ ] `go build ./tools/expr-test` produces a static binary
 - [ ] `go vet ./...` + `golangci-lint run ./...` pass
-- [ ] **DoD:** `expr-test --program 'source == "airflow" ? "etl" : ""' '{"source":"airflow","is_new":true}'` prints `group: etl`, exit 0; compile error exits non-zero; `--samples`/`--expect` batch mode usable in CI without a running service; uses the same provider code path as production
+- [ ] **DoD:** exit-code matrix verified; tool output matches production provider for same input; compile-error and type-error programs rejected; `--samples`/`--expect` CI mode tested end-to-end
 
 ---
 
@@ -442,6 +527,160 @@ Depends on RS-2, RS-3, RS-4, RS-5.
 - [ ] `internal/routing/routing_test.go` — assert `TrinSource` + `ClientTags` round-trip in `buildProtoRequest` unit tests
 - [ ] `go vet ./...` + `golangci-lint run ./...` pass on trino-goway
 - [ ] **DoD:** gateway sends `trino_source` and `client_tags` in every `Route` RPC; routing-service `expr`/`script` providers can use `request.source` and `request.client_tags` for real traffic routing
+
+---
+
+## Testing & Verification Strategy
+
+This section defines the test pyramid, conventions, threat-model coverage, and the exact CI command matrix for the routing-service. All implementation tasks are bound by these constraints.
+
+---
+
+### Test pyramid
+
+**Unit tests** (run on every `go test ./...`):
+- One `_test.go` file per package; table-driven with named subtests (`t.Run`).
+- Cover: `config` (load/validate), `engine/pipeline` (ordering, skip-on-error, all-defer, ready transitions), `engine/input` (`FromProto` field mapping including nil cases), each provider (`expr`, `script`) with the full case matrix above, `reload/watcher` (valid/invalid/concurrent), `metrics` (counter/histogram values, body redaction, `/metrics` endpoint), `logging/decision` (PII redaction, sample rate), `tracing` (parent context propagation).
+- No network, no file I/O in unit tests except `reload/watcher` which uses a real temp file (that is its subject under test).
+
+**Integration tests** (`//go:build integration`, run via `go test -tags=integration -race ./internal/integration/...`):
+- Full `Route` RPC contract over a real TCP socket (`bufconn`): proto round-trip, non-new-submission early return, pipeline default, kill-switch, health lifecycle, metrics after N calls.
+- These require no external services (Postgres, containers) — only the in-process gRPC server.
+- Run in CI as a separate step; always with `-race`.
+
+**Manual / developer verification via CLI tools**:
+- `starlark-test` and `expr-test` are the primary interactive verification loop during script/expression authoring.
+- The `--samples`/`--expect` YAML pair is the "golden suite" for a deployment: committed fixtures under `tools/testdata/`; `routing-service-validate --diff` is the CI gate that exits non-zero if routing changes unexpectedly.
+
+---
+
+### Always `-race`; always `goleak`
+
+Every `go test` invocation in CI and in the DoD gates uses `-race`:
+```
+go test -race ./...
+go test -tags=integration -race ./internal/integration/...
+```
+
+Every package with goroutines (server, reload watcher, Starlark cancel goroutine, metrics HTTP server) must have a `TestMain` that calls `goleak.VerifyTestMain(m)`. Goroutine sources to watch:
+- `grpc.NewServer` goroutines (leak if `GracefulStop` not called)
+- `fsnotify.NewWatcher` internal goroutine (leak if watcher not closed)
+- Starlark `thread.Cancel` goroutine spawned per `Evaluate` call (must exit after cancel or step-limit)
+- Prometheus HTTP server goroutine (leak if listener not closed on test teardown)
+
+---
+
+### Sandbox-escape and hostile-input coverage
+
+A dedicated fuzz/table test in `internal/engine/providers/script/sandbox_test.go` and `internal/engine/providers/expr/sandbox_test.go` throws hostile inputs at each provider and asserts they are bounded or rejected:
+
+**Starlark sandbox table** (each row: script source → expected outcome):
+| Input | Expected |
+|---|---|
+| `def route(req): load("os", "getenv"); return "x"` | `LoadConfig` or `Evaluate` error; `Decided:false` |
+| `def route(req): open("/etc/passwd")` | `EvalError` (undefined name); `Decided:false` |
+| `def route(req): import sys` | `LoadConfig` error (invalid syntax) |
+| `def route(req): [1]*10**8` | Step limit fires; `Decided:false`; returns in < 10 ms |
+| `def route(req): x = {}; [x.update({str(i):i}) for i in range(10**7)]` | Step limit fires; `Decided:false` |
+| `def route(req): route(req)` (infinite recursion) | Step limit or stack overflow caught; `Decided:false`, no panic |
+| `def route(req): return 42` (wrong return type) | `EvalError` (type mismatch on caller side); `Decided:false` |
+
+**expr sandbox table**:
+| Input | Expected |
+|---|---|
+| Program returning an integer literal | `LoadConfig` error (`AsKind(String)` check) |
+| Program referencing an undefined variable | `LoadConfig` error (type-check) |
+| Program calling a non-existent function `fetch("http://evil")` | `LoadConfig` error |
+| Program with deeply nested ternary (> 100 levels) | Compiles or compile-errors; does not hang; `Evaluate` returns quickly |
+
+These tests are **not** fuzz tests (no `testing.F`) in Phase 1 — they are table-driven with pre-enumerated hostile inputs. A `//go:build fuzz` fuzz target is noted in the Backlog for future hardening.
+
+---
+
+### Latency verification
+
+Latency regressions are caught by benchmarks in each provider package. The benchmarks are run in CI via:
+```
+go test -bench=. -benchtime=5s -count=3 ./internal/engine/providers/...
+```
+Target values (hard limits — if a benchmark's median exceeds these, the PR is flagged):
+- `BenchmarkExprEvaluate` (3-branch realistic program): p99 < 50 µs
+- `BenchmarkStarlarkEvaluate` (4-branch realistic `route(req)` function): p99 < 1 ms
+
+The benchmark helpers use a time-bounded loop (not just `b.N`) to capture a latency histogram and assert the 99th percentile value directly:
+```go
+// collect 10_000 timings, sort, assert timings[9900] < threshold
+```
+
+---
+
+### Golden suites and CI dry-run gate
+
+The `--samples`/`--expect` YAML pairs are committed as `tools/testdata/` fixtures. There is one fixture set per provider type, covering all PRD §6.2 scenarios (airflow→etl, superset→interactive with canary, client-tag routing, user-domain routing).
+
+The CI dry-run gate runs on every PR that touches any provider, config, or script file:
+```
+./bin/routing-service-validate --config config.yaml --samples tools/testdata/samples.yaml --diff --baseline tools/testdata/baseline.yaml
+```
+Exit code 2 = unexpected routing change = PR blocked. Exit code 1 = config invalid = PR blocked. Exit code 0 = safe to merge.
+
+---
+
+### Negative config tests (consolidated)
+
+These are covered by `config_test.go` and `registry_test.go`:
+- Invalid YAML (malformed) → `config.Load` returns parse error
+- Unknown method `type` in config → `Registry.Build` returns error (type not registered)
+- Method compile error (bad expr / bad Starlark) → `LoadConfig` returns error; `Pipeline` not activated with the bad method
+- Both `program` and `file` set in the same method → `Validate()` error
+- Neither `program` nor `file` set → `Validate()` error
+- Empty `default_routing_group` → `Validate()` error
+- `addr` already in use → `Server.Start` returns bind error
+
+---
+
+### Coverage expectation
+
+- Unit tests: ≥ 80% statement coverage per package (enforced via `go test -coverprofile` in CI; `golangci-lint`'s `cyclop` linter flags functions over complexity 15 for test attention)
+- Integration tests: cover the end-to-end `Route` contract; not counted toward per-package unit coverage
+- Explicitly excluded from coverage: generated `routerpb/` stubs, `cmd/routing-service/main.go` (tested via integration), `tools/*/main.go` (tested via their own `_test.go`)
+
+---
+
+### Exact CI command matrix
+
+```sh
+# Phase 0 gate (scaffold)
+go build ./...
+go vet ./...
+golangci-lint run ./...
+
+# Phase 1–6 gate (all tasks)
+go build ./...
+go vet ./...
+go test -race -coverprofile=coverage.out ./...
+golangci-lint run ./...
+
+# Integration gate (RS-12, runs in a separate CI job)
+go test -tags=integration -race -v ./internal/integration/...
+
+# Benchmark gate (providers, runs on PR touching providers/)
+go test -bench=. -benchtime=5s -count=3 ./internal/engine/providers/...
+
+# Dry-run CI gate (runs on PR touching any config, provider, or script file)
+go build -o bin/routing-service-validate ./cmd/routing-service-validate
+./bin/routing-service-validate \
+  --config tools/testdata/config.yaml \
+  --samples tools/testdata/samples.yaml \
+  --diff --baseline tools/testdata/baseline.yaml
+# exit 0 = safe; exit 1 = config invalid; exit 2 = unexpected route change
+
+# CLI tool smoke (runs on every build)
+go build -o bin/starlark-test ./tools/starlark-test
+go build -o bin/expr-test ./tools/expr-test
+./bin/starlark-test tools/testdata/route.star tools/testdata/airflow.json
+./bin/expr-test tools/testdata/route.expr tools/testdata/airflow.json
+```
 
 ---
 
