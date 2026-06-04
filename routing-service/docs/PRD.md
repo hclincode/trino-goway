@@ -70,17 +70,17 @@ Reserved for later (not Phase 1): `RouteResponse.resource_group_hint` (inject as
 ## 5. Phase 1 scope (gRPC, Go)
 
 1. **gRPC server** implementing `TrinoGatewayRouter.Route` + `grpc.health.v1.Health` (Check + Watch). Insecure transport (matches the gateway client today). Graceful shutdown (`GracefulStop`).
-2. **Routing-logic engine — pluggable & multi-method (see §6.1):** a `RoutingMethod` provider interface + registry + ordered evaluation pipeline, shipping the `rules`, `template` (Go `text/template`), `script` (Starlark), and `external` (delegate) methods in v1, with a buffer for future methods (`expr`, `wasm`, …) and uniform harness-enforced guardrails. The default `rules` method uses declarative YAML with **CEL** (`google/cel-go`) conditions:
-   - Each rule: `name` (req), `priority` (int, default 0), `condition` (CEL→bool), `routing_group` (string) or `routing_group_expr` (CEL→string, computed group name — see §6.1), optional `external_headers` (map).
-   - Evaluation matches the Java engine: **all matching rules run in ascending priority; last writer wins** (no first-match short-circuit). Service-level `default_routing_group` for the no-match case.
-   - CEL context is a flat struct over the proto: `request.source`, `request.client_tags`, `request.user`, `request.catalog`, `request.schema`, `request.method`, `request.uri`, `request.remote_addr`, `request.body`. CEL chosen for being **sandboxed by construction** (no process/fs/network) and load-time type-checkable.
-   - `state` cross-rule map: documented as a known gap for v1 (most real rules don't need it); add later if demanded.
-3. **Weighted routing (canary / blue-green)** — a rule may resolve to a **weighted split** across groups (e.g. `stable: 95, canary: 5`), addressable by tenant or as a random percentage. Weights are live-reloadable; setting a weight to 0 is instant rollback (applied on the next request, no grace period).
+2. **Routing-logic engine — pluggable & multi-method (see §6.1):** a `RoutingMethod` provider interface + registry + ordered evaluation pipeline. **Phase 1 ships two method providers — `expr` (expr-lang/expr) and `script` (Starlark)** — with a registry buffer for future methods (`rules`/CEL, `template`, `wasm`, …). `external` (delegate to a polyglot router) is available by config.
+   - **`expr`** — an expr-lang program returning a group-name string (`""` = defer). MVEL-ish ternary / `in` / string ops; bounded by construction (expression-only, no loops).
+   - **`script`** — a Starlark `route(req) -> group|None` function (procedural; `None` = defer), run under a `thread.SetMaxSteps` cap + wall-clock deadline.
+   - Both see the same read-only context over the proto: `request.source`, `request.client_tags`, `request.user`, `request.catalog`, `request.schema`, `request.method`, `request.uri`, `request.remote_addr`, `request.body`, plus curated helpers (e.g. `hashPct(s)` for deterministic canary). No I/O/network exposed.
+   - Both are **platform-admin-authored** (higher-trust); an empty/`None`/error result falls through to the next method and finally to `default_routing_group`.
+3. **Canary / blue-green** — done inside the method via the deterministic `hashPct(user|tenant)` helper (e.g. `hashPct(user) < 5 → canary`), so the split lives in the hot-reloaded `expr`/`script` config; lowering the threshold to 0 is instant rollback on the next request. (A declarative `weighted_groups` construct returns with the future `rules` method.)
 4. **Dynamic config (hot-reload)** — watch a config source (file via fsnotify in Phase 1); on change: **parse + validate against schema BEFORE activating**; on failure keep the last-known-good config live and emit an error metric + structured log with the failing diff; on success emit an **audit event** (timestamp, trigger, old/new config hash, changed-rule summary). Provide a **dry-run** path (CLI/sidecar) that reports which sample requests would route differently.
-5. **Fail-safe behavior** — no rule match → `default_routing_group` (first-class outcome). Invalid/empty config **at startup** → health `NOT_SERVING` (never serve an empty rule set). Treat `is_query_parsing_successful=false` / the `"trino-parser not available"` `error_message` as normal, never as an error signal.
-6. **Validation at load** — group names exist in the operator's group registry (or warn), canary weights sum to 100, no circular references, over-broad conditions warned (not blocked), tenant-scope isolation enforced (see §8).
+5. **Fail-safe behavior** — no method decides → `default_routing_group` (first-class outcome). Invalid/empty config **at startup** → health `NOT_SERVING` (never serve a broken method set). Treat `is_query_parsing_successful=false` / the `"trino-parser not available"` `error_message` as normal, never as an error signal.
+6. **Validation at load** — `expr` / Starlark programs **compile** (and step-budget/type check) before activation; group names checked against the operator's group registry (or warn); over-broad logic warned (not blocked); tenant-scope isolation enforced (see §8).
 7. **Observability** — Prometheus metrics, structured decision logs, OpenTelemetry tracing (see §7).
-8. **Config & ops docs** — README, rule-config reference, a **migration guide** from MVEL `routing_rules.yml`, and a **Python reference implementation** of the `TrinoGatewayRouter` contract (the sanctioned path for procedural / other-language routing, §6.1).
+8. **Config & ops docs** — README, `expr` + Starlark authoring reference, an **MVEL→`expr` migration guide** (`expr` is the MVEL-closest syntax), and a small **Python reference `external` router** (the polyglot escape hatch, §6.1).
 
 ### Later phases (recorded, not committed)
 - **HTTP transport** (the gateway supports both; operators may run both as belt-and-suspenders).
@@ -90,40 +90,28 @@ Reserved for later (not Phase 1): `RouteResponse.resource_group_hint` (inject as
 
 ---
 
-## 6. Routing rule model (config sketch)
+## 6. Config sketch (Phase 1)
 
 ```yaml
-default_routing_group: adhoc          # service fallback for "no rule matched"
-rules_refresh_period: 30s             # hot-reload cadence (plus fsnotify on change)
-
-rules:
-  - name: airflow-etl
-    priority: 0
-    condition: 'request.source == "airflow"'
-    routing_group: etl
-    external_headers: { X-Trino-Client-Tags: "etl" }
-
-  - name: superset-interactive
-    priority: 0
-    condition: 'request.source == "superset"'
-    routing_group: interactive
-
-  - name: premium-tenant
-    priority: 10
-    condition: 'request.user.startsWith("acme-")'
-    routing_group: premium
-
-  - name: canary-rollout                # weighted split (blue/green)
-    priority: 20
-    condition: 'request.source == "superset"'
-    weighted_groups: { interactive: 95, interactive-canary: 5 }
+default_routing_group: adhoc          # gateway default when all methods defer
+methods:                              # ordered chain — first definitive decision wins
+  - type: expr                        # expr-lang — fast expression decisions
+    refresh: 30s
+    program: |
+      request.source == "airflow" ? "etl"
+        : request.source == "superset" ? (hashPct(request.user) < 5 ? "interactive-canary" : "interactive")
+        : "tier=premium" in request.client_tags ? "premium"
+        : ""                          # "" = defer to next method / default
+  - type: script                      # Starlark — procedural long-tail
+    refresh: 30s
+    file: routes.star                 # defines route(req) -> group name or None
 ```
 
-`default_routing_group` here is the *service's* default; it should match the gateway's `routing.defaultGroup` unless the operator intentionally diverges — document the coupling.
+Both methods are platform-admin-authored; an empty/`None`/error result falls through to the next method and finally to `default_routing_group` (which should match the gateway's `routing.defaultGroup`).
 
 ### 6.1 Routing-logic methods — pluggable, multi-method, extensible
 
-**Product decision (overrides the earlier "declarative-only v1" lean):** the service supports **multiple routing-logic methods** — declarative rules, **templating**, and **scripting** — and is **designed so new methods can be added without touching the core** (a buffer for future methods). The earlier discussion's *safety* conclusions are retained, but as **cross-cutting guardrails enforced by the engine harness** rather than a reason to ship only one method.
+**Product decision:** the routing engine is **pluggable and multi-method**, designed so new methods can be added without touching the core (a buffer for future methods). **Phase 1 ships two methods — `expr` (expr-lang) and `script` (Starlark)** (confirmed scope). Declarative `rules` (CEL) and `template` are deferred to the registry buffer; `external` (polyglot) stays available by architecture. The earlier discussion's *safety* conclusions are retained as **cross-cutting guardrails enforced by the engine harness**.
 
 #### Architecture — a `RoutingMethod` provider + evaluation pipeline
 
@@ -144,18 +132,18 @@ type RoutingMethod interface {
 }
 ```
 
-**Pipeline:** the `Route` RPC runs an **ordered chain** of the enabled methods (order is config). Each returns a `Decision` or "no opinion" (`Decided=false`, empty group); the **first definitive decision wins**; if none decide, the gateway's default group applies. The harness — not the method — enforces the global wall-clock budget, per-method step/time limits, metrics, dry-run, and fallback. This composes cleanly: declarative rules handle 95%, a script/template method handles the long tail, all under one safety envelope.
+**Pipeline:** the `Route` RPC runs an **ordered chain** of the enabled methods (order is config). Each returns a `Decision` or "no opinion" (`Decided=false`, empty group); the **first definitive decision wins**; if none decide, the gateway's default group applies. The harness — not the method — enforces the global wall-clock budget, per-method step/time limits, metrics, dry-run, and fallback. This composes cleanly: e.g. an `expr` method handles the common fast cases and a `script` method handles the procedural long tail, all under one safety envelope. (A future declarative `rules` method can front the chain for the auditable 95%.)
 
 #### Methods
 
 | `type` | Engine | Phase | Trust class |
 |---|---|---|---|
-| `rules` | Declarative YAML + **CEL** conditions (+ `routing_group_expr` CEL→string) | **v1 (default)** | low — broadly usable, incl. tenant-scoped |
-| `template` | **Go `text/template`** rendering a group name from request attributes (sandboxed: only the funcs we expose; deterministic; no I/O) | **v1** | low |
-| `script` | **Starlark** (`go.starlark.net`) — Python-like, structural sandbox, `thread.SetMaxSteps` step cap, deterministic | **v1** | high — platform-admins only |
-| `external` | Delegate to another gRPC/HTTP router (chains the polyglot escape hatch — e.g. a **Python** `TrinoGatewayRouter` impl) | **v1** | n/a (out-of-process) |
-| `expr` | `expr-lang/expr` — MVEL-closest syntax, for migration familiarity | buffer (opt-in) | high |
-| `wasm` | WebAssembly modules — the strategic "any sandboxed language" plug | **buffer (future)** | high |
+| `expr` | `expr-lang/expr` — MVEL-ish expression returning a group name; bounded (no loops) | **v1** | high — platform-admins only |
+| `script` | **Starlark** (`go.starlark.net`) — Python-like procedural; structural sandbox, `thread.SetMaxSteps` cap | **v1** | high — platform-admins only |
+| `external` | Delegate to another gRPC/HTTP router (polyglot escape hatch — e.g. a **Python** `TrinoGatewayRouter`) | available by config | n/a (out-of-process) |
+| `rules` | Declarative YAML + **CEL** (+ `routing_group_expr`); auditable, tenant-scoped self-serve | buffer (fast-follow) | low |
+| `template` | **Go `text/template`** → group name | buffer | low |
+| `wasm` | WebAssembly — "any sandboxed language", hot-swappable | buffer (future) | high |
 | ML / others | future providers | buffer | per-provider |
 
 The **buffer for new methods** is concrete: (a) the `RoutingMethod` interface + registry; (b) a config `type` discriminator per method; (c) reserved proto/extension fields. `wasm` is the intended long-term answer for "arbitrary language, safely sandboxed, hot-swappable."
@@ -164,13 +152,44 @@ The **buffer for new methods** is concrete: (a) the `RoutingMethod` interface + 
 
 - **Fail-safe:** any method error/timeout/over-budget → that method is skipped and the chain continues; ultimately the gateway default — never a 5xx to the user.
 - **Resource limits:** global per-request wall-clock budget + per-method step/CPU caps (e.g. Starlark `SetMaxSteps`, `context` deadline + `thread.Cancel`); no I/O/network/syscalls exposed to any in-process method.
-- **Trust tiers:** low-risk methods (`rules`, `template`) authorable within tenant namespaces; high-risk methods (`script`, `wasm`, `expr`) **platform-admins only**. Tenant-namespace isolation enforced at load.
+- **Trust tiers:** both Phase-1 methods (`expr`, `script`) are higher-trust → **platform-admins only**; v1 has no tenant self-serve routing (the low-risk declarative `rules`/`template` methods, authorable within tenant namespaces, are the fast-follow that adds it). Tenant-namespace isolation enforced at load.
 - **Change safety:** validate-before-activate (keep last-known-good), **mandatory dry-run** (replay candidate config/script against recent or synthetic traffic, show the routing diff), **staged % rollout** for high-risk methods, **instant kill-switch** (a `DisableMethod`/`DisableScript` op with sub-second propagation), full **audit** (author, timestamp, content hash, dry-run reviewed), and per-`method`/`rule_id`/`script_id` **metrics + error alerts**.
 - **No raw SQL in logs** (hash/prefix only).
 
 #### Why this shape
 
-It gives operators the multiple methods you want (declarative + templating + scripting) **today**, keeps the safety envelope the team insisted on (the guardrails live in the harness, so adding a method doesn't reopen the risk), and the provider interface means new methods (`expr`, `wasm`, ML, …) drop in later without a redesign. Full external/other-language logic remains a first-class `external` method (the gRPC boundary is polyglot by design; a **Python reference router** ships in v1).
+Phase 1 gives operators `expr` + `script` today; the harness holds the safety envelope so new methods later (`rules`/CEL, `template`, `wasm`, ML) need no redesign — they register behind the same interface. Full external/other-language logic stays available via the `external` method (the gRPC boundary is polyglot by design — implement `TrinoGatewayRouter` in Python/JVM/Node and point the chain at it).
+
+### 6.2 Worked examples — `expr` and `script` (same scenario)
+
+Scenario: `airflow`→`etl`; `superset`→`interactive` (5% canary → `interactive-canary`); client tag `tier=premium`→`premium`; user `…@analytics.acme.com`→computed `etl-analytics`; else defer.
+
+**`expr`** (program returns the group name; `""` = defer):
+
+```
+request.source == "airflow" ? "etl"
+  : request.source == "superset" ? (hashPct(request.user) < 5 ? "interactive-canary" : "interactive")
+  : "tier=premium" in request.client_tags ? "premium"
+  : hasSuffix(request.user, "@analytics.acme.com") ? "etl-" + split(split(request.user, "@")[1], ".")[0]
+  : ""
+```
+
+**`script`** (Starlark `route(req)`; `None` = defer):
+
+```python
+def route(req):
+    if req.source == "airflow":
+        return "etl"
+    if req.source == "superset":
+        return "interactive-canary" if hashPct(req.user) < 5 else "interactive"
+    if "tier=premium" in req.client_tags:
+        return "premium"
+    if req.user.endswith("@analytics.acme.com"):
+        return "etl-" + req.user.split("@")[1].split(".")[0]
+    return None
+```
+
+Both run under the harness: empty/`None`/error/over-budget → next method → `default_routing_group`; `hashPct` is the provided deterministic 0–99 helper for canary; no I/O is exposed.
 
 ---
 
@@ -220,7 +239,7 @@ Gateway-side knobs the operator sets (existing): `routing.external.grpcAddr` (en
 
 1. Tenant identity source for Phase 1 — `X-Trino-User` mapping vs. a gateway-injected `X-Tenant-ID` (proto add)? 
 2. Group-name validation — does the service get the gateway's group registry (config injection / capability endpoint), or only warn on unknown groups?
-3. ~~Is the `state` cross-rule map needed in Phase 1?~~ **RESOLVED (§6.1):** not modeled in the `rules` method — rewrite as compound conditions. Scriptable-routing question **RESOLVED (§6.1):** the engine is pluggable & multi-method — `rules` (CEL) + `template` + `script` (Starlark) ship in v1 under uniform harness guardrails, with a registry buffer for future methods (`expr`, `wasm`) and `external` for polyglot/Python.
+3. **RESOLVED (§6.1):** the engine is pluggable & multi-method; **Phase 1 ships `expr` (expr-lang) + `script` (Starlark)** under uniform harness guardrails (confirmed scope). Declarative `rules`/CEL + `template` are registry-buffer fast-follows; `external` covers polyglot/Python. (Cross-rule `state` map not modeled.)
 4. Confirm the trino-goway proto additions (§4.1) are in scope for this effort (they require a gateway change + release).
 
 ## 12. Success criteria
