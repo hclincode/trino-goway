@@ -30,7 +30,7 @@ Off critical path (start after RS-3): RS-10, RS-11, RS-12
   - `make lint` — `golangci-lint run ./...`
   - `make proto` — run the `protoc` invocation in `proto/`
   - `make all` — `build vet lint test` in order
-  - `make starlark-test` / `make expr-test` — build the CLI tools to `bin/`
+  - `make starlark-test` / `make expr-test` — `go build -o bin/{tool} ./tools/{tool}` (source under `tools/`, output to `bin/`)
 - [ ] `routing-service/.golangci.yml` — lint config: `errcheck`, `govet`, `staticcheck`, `exhaustive`, `bodyclose`; mirrors the parent repo's lint profile
 - [ ] `routing-service/docs/CONVENTIONS.md` — documents:
   - **Stack:** Go 1.23, `google.golang.org/grpc` (insecure Phase 1), `google.golang.org/grpc/health`, `github.com/expr-lang/expr`, `go.starlark.net`, `github.com/prometheus/client_golang` (own registry, no global), `go.opentelemetry.io/otel`, `gopkg.in/yaml.v3`, `github.com/fsnotify/fsnotify`
@@ -253,58 +253,133 @@ Depends on RS-2 (server), RS-3 (pipeline). Can be partially started after RS-2.
 
 ### Task RS-10 — `starlark-test` CLI tool
 
-Standalone tool to test a Starlark routing script against a set of sample inputs without running the full service. Useful for script authoring, CI validation, and pre-deploy dry-run.
+Standalone tool to load a Starlark routing script, build the request context from a given input, run `route(req)`, and print the execution result. Runs under the same `SetMaxSteps` cap and structural sandbox as the production provider. The primary use case is interactive script authoring; the batch `--samples` mode is the basis for dry-run CI validation.
 
 Depends on RS-5 (Starlark provider).
 
-- [ ] `routing-service/tools/starlark-test/main.go` — flags:
-  - `--script <path>` (required) — `.star` file to test
-  - `--samples <path>` (required) — YAML file of sample `RouteInput` records (same schema as `routing-service-validate` samples)
-  - `--max-steps <n>` (default `10000`) — override the step budget for this test run
-  - `--verbose` — print full input + decision per sample; without it, print only mismatches or errors
-  - `--expect <path>` (optional) — YAML of `{sample_id: expected_group}` expectations; exit non-zero if any expectation fails
-- [ ] Sample YAML schema (`RouteInput` record):
-  ```yaml
-  - id: airflow-etl
-    source: airflow
-    user: pipeline@acme.com
-    client_tags: []
-    catalog: hive
-    is_new: true
-  - id: superset-interactive
-    source: superset
-    user: alice@acme.com
-    is_new: true
-  ```
-- [ ] Output format (tabular):
-  ```
-  SAMPLE                  GROUP           LATENCY   STATUS
-  airflow-etl             etl             0.12ms    OK
-  superset-interactive    interactive     0.09ms    OK
-  (no-match)              (deferred)      0.08ms    OK
-  ```
-  On step-limit hit: status = `STEP_LIMIT`; on script error: status = `ERROR: <msg>`
-- [ ] `routing-service/tools/starlark-test/main_test.go` — run a valid script against 3 samples; assert output; run a step-limit-tripping script; assert `STEP_LIMIT` in output and non-zero exit; run with `--expect` mismatch; assert non-zero exit
+**Interface:**
+```
+starlark-test <script-path> <input>
+```
+- `arg1` (`<script-path>`) — path to the `.star` file to load; must define `def route(req):`
+- `arg2` (`<input>`) — the request input, one of:
+  - an inline JSON object: `'{"source":"airflow","user":"pipeline@acme.com","is_new":true}'`
+  - a path to a `.json` file: `./request.json`
+  - JSON key→`RouteInput` field mapping: `source`, `user`, `client_tags` (array of strings), `catalog`, `schema`, `method`, `uri`, `remote_addr`, `body`, `is_new` (bool), `param_map` (object); all keys optional, zero-value if absent
+
+**Single-input output (stdout):**
+```
+group:   etl
+latency: 0.14ms
+status:  OK
+```
+`status` values: `OK`, `STEP_LIMIT` (step cap hit), `ERROR: <msg>` (script runtime error), `DEFERRED` (script returned `None` or `""`)
+
+**Additional flags:**
+- `--max-steps <n>` (default `10000`) — override the step budget for this invocation only; does not affect the service's production cap
+- `--samples <path>` — run against a YAML batch file of inputs; `arg2` is ignored; prints one table row per sample
+- `--expect <path>` (requires `--samples`) — YAML of `{sample_id: expected_group}`; exit non-zero on any expectation miss
+- `--verbose` — print the deserialized `RouteInput` fields before the result
+
+**Batch YAML schema** (for `--samples`):
+```yaml
+- id: airflow-etl
+  source: airflow
+  user: pipeline@acme.com
+  client_tags: []
+  catalog: hive
+  is_new: true
+- id: superset-interactive
+  source: superset
+  user: alice@acme.com
+  is_new: true
+```
+
+**Batch output:**
+```
+SAMPLE                  GROUP           LATENCY   STATUS
+airflow-etl             etl             0.12ms    OK
+superset-interactive    interactive     0.09ms    OK
+no-match                (deferred)      0.08ms    OK
+```
+
+**Usage examples:**
+```sh
+# single input, inline JSON (the primary authoring loop)
+starlark-test routes.star '{"source":"airflow","user":"alice","is_new":true}'
+
+# single input from a JSON file
+starlark-test routes.star ./request.json
+
+# batch CI validation with expectations
+starlark-test routes.star --samples samples.yaml --expect expected.yaml
+
+# raise step budget for profiling without hitting the production cap
+starlark-test routes.star '{"source":"airflow"}' --max-steps 100000
+```
+
+- [ ] `routing-service/tools/starlark-test/main.go` — implement the interface above; detect `arg2` as JSON file vs inline by checking whether the value is a valid file path that exists; build a `RouteInput` from the parsed JSON; invoke `ScriptProvider.Evaluate` directly (reuse the production provider, same sandbox + limits); single-input: print key:value lines; batch (`--samples`): print table; exit 0 on success, non-zero on script error, step limit, or expectation miss
+- [ ] `routing-service/tools/starlark-test/main_test.go`:
+  - Single-input valid script + inline JSON → correct group, exit 0
+  - Single-input step-limit script → `STEP_LIMIT` in output, exit non-zero
+  - Single-input missing `route` function → `ERROR: ...` in output, exit non-zero
+  - Batch `--samples` + matching `--expect` → exit 0
+  - Batch `--samples` + mismatched `--expect` → exit non-zero
 - [ ] `go build ./tools/starlark-test` produces a static binary
 - [ ] `go vet ./...` + `golangci-lint run ./...` pass
-- [ ] **DoD:** `starlark-test --script routes.star --samples samples.yaml --expect expected.yaml` exits 0 on match; exits non-zero on any expectation miss or script error; usable in CI without a running service
+- [ ] **DoD:** `starlark-test routes.star '{"source":"airflow","is_new":true}'` prints `group: etl`, exit 0; step-limit script exits non-zero within < 100 ms; `--samples`/`--expect` batch mode usable in CI without a running service; uses the same provider code path as production
 
 ### Task RS-11 — `expr-test` CLI tool
 
-Standalone tool to test an `expr-lang` routing program against sample inputs. Mirror of `starlark-test` but for the `expr` provider.
+Standalone tool to compile an `expr-lang` routing program, evaluate it against a given input, and print the result. Mirror of `starlark-test` for the `expr` provider. Uses the same `ExprProvider` code path as production.
 
 Depends on RS-4 (expr provider).
 
-- [ ] `routing-service/tools/expr-test/main.go` — flags:
-  - `--program <string>` — inline expr program (mutually exclusive with `--file`)
-  - `--file <path>` — file containing the expr program
-  - `--samples <path>` (required) — same YAML schema as `starlark-test`
-  - `--verbose`, `--expect <path>` — same semantics as `starlark-test`
-- [ ] Output format — same tabular layout as `starlark-test`; status `COMPILE_ERROR` if program fails to compile; `RUNTIME_ERROR: <msg>` if `expr.Run` errors; `DEFERRED` if program returns `""`
-- [ ] `routing-service/tools/expr-test/main_test.go` — inline program `source == "airflow" ? "etl" : ""` against samples; assert `etl` for airflow source, `DEFERRED` for others; invalid program → `COMPILE_ERROR` + non-zero exit; `--expect` mismatch → non-zero exit
+**Interface:**
+```
+expr-test <program-path> <input>
+```
+- `arg1` (`<program-path>`) — path to a file containing the expr program; alternatively supplied via `--program <string>` for inline use (in which case `arg2` is still the second positional or `--input`)
+- `arg2` (`<input>`) — same format as `starlark-test`: inline JSON object or path to a `.json` file; same `RouteInput` field mapping
+
+**Single-input output:**
+```
+group:   etl
+latency: 0.09ms
+status:  OK
+```
+`status` values: `OK`, `COMPILE_ERROR: <msg>` (program failed to compile), `RUNTIME_ERROR: <msg>` (eval error), `DEFERRED` (program returned `""`)
+
+**Additional flags:**
+- `--program <string>` — inline expr program source; mutually exclusive with `arg1` file path
+- `--samples <path>` — same batch YAML as `starlark-test`; `arg2` ignored
+- `--expect <path>` (requires `--samples`) — same expectations YAML as `starlark-test`
+- `--verbose` — print deserialized `RouteInput` before result
+
+**Usage examples:**
+```sh
+# program from file, input inline
+expr-test routes.expr '{"source":"airflow","is_new":true}'
+
+# program inline (no file needed)
+expr-test --program 'source == "airflow" ? "etl" : ""' '{"source":"airflow"}'
+
+# batch CI check
+expr-test routes.expr --samples samples.yaml --expect expected.yaml
+
+# input from JSON file
+expr-test routes.expr ./request.json
+```
+
+- [ ] `routing-service/tools/expr-test/main.go` — implement the interface above; use `ExprProvider.LoadConfig` to compile (catches type errors at load time, same as production) and `ExprProvider.Evaluate` to run; single-input: print key:value; batch: print table; exit codes match `starlark-test`
+- [ ] `routing-service/tools/expr-test/main_test.go`:
+  - `--program 'source == "airflow" ? "etl" : ""'` + `'{"source":"airflow"}'` → `group: etl`, exit 0
+  - Same program + `'{"source":"superset"}'` → `DEFERRED`, exit 0
+  - Invalid program → `COMPILE_ERROR` in output, exit non-zero
+  - Batch `--samples` + matching `--expect` → exit 0; mismatch → exit non-zero
 - [ ] `go build ./tools/expr-test` produces a static binary
 - [ ] `go vet ./...` + `golangci-lint run ./...` pass
-- [ ] **DoD:** `expr-test --program '...' --samples samples.yaml` reports group or `DEFERRED` per sample; CI-friendly exit codes
+- [ ] **DoD:** `expr-test --program 'source == "airflow" ? "etl" : ""' '{"source":"airflow","is_new":true}'` prints `group: etl`, exit 0; compile error exits non-zero; `--samples`/`--expect` batch mode usable in CI without a running service; uses the same provider code path as production
 
 ---
 
