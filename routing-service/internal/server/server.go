@@ -7,16 +7,31 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"runtime/debug"
 	"sync/atomic"
+	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/status"
 
 	"github.com/hclincode/trino-goway-routing-service/internal/config"
 	pb "github.com/hclincode/trino-goway-routing-service/routerpb"
 )
+
+// gracefulStopTimeout is the maximum time to wait for in-flight RPCs to drain
+// before falling back to a hard Stop. Matches the 30s deadline documented in
+// the TODO and in cmd/routing-service/main.go's signal handler.
+const gracefulStopTimeout = 30 * time.Second
+
+// newTimer returns a channel that fires after d. Indirected via a variable so
+// tests can override it with a shorter timeout.
+var newTimer = func(d time.Duration) <-chan time.Time {
+	return time.After(d)
+}
 
 // Evaluator is the interface the routing engine exposes to the server.
 // RS-3 wires the real pipeline here; RS-2 provides a stub implementation.
@@ -50,6 +65,14 @@ func New(cfg *config.Config, eval Evaluator, log *slog.Logger) *Server {
 
 	gs := grpc.NewServer(
 		grpc.Creds(insecure.NewCredentials()),
+		// Interceptor chain (unary). Order: panic recovery → (OTel seam) → (metrics seam).
+		// Recovery must be outermost so it catches panics from any inner interceptor.
+		// OTel and metrics seams are no-ops here; full implementations land in RS-9.
+		grpc.ChainUnaryInterceptor(
+			panicRecoveryInterceptor(log),
+			noopOTelInterceptor,
+			noopMetricsInterceptor,
+		),
 	)
 
 	s := &Server{
@@ -66,6 +89,38 @@ func New(cfg *config.Config, eval Evaluator, log *slog.Logger) *Server {
 	return s
 }
 
+// panicRecoveryInterceptor returns a unary interceptor that recovers from
+// panics in downstream handlers, logs a stack trace, and converts the panic
+// to a gRPC INTERNAL error so the server goroutine stays alive.
+func panicRecoveryInterceptor(log *slog.Logger) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp any, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				stack := debug.Stack()
+				log.Error("server: panic in handler — recovered",
+					"method", info.FullMethod,
+					"panic", r,
+					"stack", string(stack),
+				)
+				err = status.Errorf(codes.Internal, "internal error")
+			}
+		}()
+		return handler(ctx, req)
+	}
+}
+
+// noopOTelInterceptor is a placeholder for the OpenTelemetry tracing
+// interceptor. RS-9 replaces this with otelgrpc.UnaryServerInterceptor.
+func noopOTelInterceptor(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	return handler(ctx, req)
+}
+
+// noopMetricsInterceptor is a placeholder for the Prometheus metrics
+// interceptor. RS-9 replaces this with real counter/histogram recording.
+func noopMetricsInterceptor(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	return handler(ctx, req)
+}
+
 // Start begins listening on cfg.Addr and serving gRPC. It blocks until ctx is
 // cancelled, then calls GracefulStop.
 func (s *Server) Start(ctx context.Context) error {
@@ -77,8 +132,9 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 // StartOnListener serves gRPC on an already-bound listener. It blocks until
-// ctx is cancelled, then calls GracefulStop. Useful in tests to inject a
-// pre-bound :0 listener and read back the OS-assigned port.
+// ctx is cancelled, then performs a graceful shutdown with a 30s cap before
+// falling back to a hard Stop. Useful in tests to inject a pre-bound :0
+// listener and read back the OS-assigned port.
 func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 	serveErr := make(chan error, 1)
 	go func() {
@@ -92,17 +148,38 @@ func (s *Server) StartOnListener(ctx context.Context, lis net.Listener) error {
 	select {
 	case <-ctx.Done():
 		s.log.Info("routing-service: context done, stopping gRPC server")
-		s.grpcs.GracefulStop()
+		s.gracefulStopWithTimeout()
 		return nil
 	case err := <-serveErr:
 		return fmt.Errorf("server: serve: %w", err)
 	}
 }
 
-// Stop performs a graceful shutdown, draining in-flight RPCs before returning.
+// Stop performs a graceful shutdown with a 30s cap, draining in-flight RPCs.
+// Falls back to a hard Stop if the drain exceeds the cap.
 // Safe to call from a signal handler concurrently with Start.
 func (s *Server) Stop() {
-	s.grpcs.GracefulStop()
+	s.gracefulStopWithTimeout()
+}
+
+// gracefulStopWithTimeout attempts GracefulStop within gracefulStopTimeout.
+// If the drain does not complete in time, it calls Stop() for an immediate
+// shutdown, ensuring the process can always exit within a bounded deadline.
+func (s *Server) gracefulStopWithTimeout() {
+	stopped := make(chan struct{})
+	go func() {
+		s.grpcs.GracefulStop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+		// Clean drain — nothing to do.
+	case <-newTimer(gracefulStopTimeout):
+		s.log.Warn("routing-service: graceful stop timeout, forcing hard stop",
+			"timeout", gracefulStopTimeout)
+		s.grpcs.Stop()
+	}
 }
 
 // SetReady transitions the health status. Pass true once the routing engine

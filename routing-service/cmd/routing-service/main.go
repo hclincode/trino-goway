@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/hclincode/trino-goway-routing-service/internal/config"
+	"github.com/hclincode/trino-goway-routing-service/internal/engine"
 	"github.com/hclincode/trino-goway-routing-service/internal/server"
 )
 
@@ -42,9 +43,30 @@ func main() {
 		"methodCount", len(cfg.Methods),
 	)
 
-	// RS-2 stub: use the stub evaluator. RS-3 wires the real pipeline.
-	eval := server.NewStubEvaluator(nil)
+	// RS-3: build the real pipeline with the configured methods.
+	// No providers are registered yet (RS-4 adds expr, RS-5 adds script), so
+	// the pipeline starts empty and the registry is populated as providers land.
+	// An empty pipeline is valid: every request defers to cfg.DefaultRoutingGroup.
+	reg := engine.NewRegistry()
+	// RS-4 will add: reg.Register("expr", func() engine.RoutingMethod { return exprprovider.New() })
+	// RS-5 will add: reg.Register("script", func() engine.RoutingMethod { return scriptprovider.New() })
+
+	var methods []engine.RoutingMethod
+	for _, mc := range cfg.Methods {
+		m, err := reg.Build(mc)
+		if err != nil {
+			log.Error("routing-service: failed to build method", "type", mc.Type, "err", err)
+			os.Exit(1)
+		}
+		methods = append(methods, m)
+	}
+
+	pipeline := engine.NewPipeline(methods, cfg.DefaultRoutingGroup, log)
+	eval := engine.NewPipelineEvaluator(pipeline)
 	srv := server.New(cfg, eval, log)
+
+	// Transition health to SERVING now that the pipeline is ready.
+	srv.SetReady(pipeline.Ready())
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()

@@ -337,3 +337,137 @@ func (e *slowEvaluator) Evaluate(ctx context.Context, _ *pb.RouteRequest) string
 }
 
 func (e *slowEvaluator) Ready() bool { return false }
+
+// panicEvaluator panics on every Evaluate call.
+type panicEvaluator struct{}
+
+func (e *panicEvaluator) Evaluate(_ context.Context, _ *pb.RouteRequest) string {
+	panic("simulated provider panic")
+}
+func (e *panicEvaluator) Ready() bool { return false }
+
+// TestPanicRecovery_ReturnsErrorNotCrash verifies that a panicking evaluator
+// causes Route to return a gRPC INTERNAL error (not crash the server goroutine)
+// and that the server continues serving subsequent requests.
+func TestPanicRecovery_ReturnsErrorNotCrash(t *testing.T) {
+	cfg := &config.Config{
+		Addr:                ":0",
+		MetricsAddr:         ":0",
+		DefaultRoutingGroup: "default",
+	}
+	srv := server.New(cfg, &panicEvaluator{}, newTestLogger(t))
+
+	addr, stop := startOnFreePort(t, srv)
+	defer stop()
+
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := conn.Close(); err != nil {
+			t.Logf("conn.Close: %v", err)
+		}
+	})
+	rc := pb.NewTrinoGatewayRouterClient(conn)
+
+	// A panicking evaluator is only reached for new query submissions.
+	req := &pb.RouteRequest{
+		Method:     "POST",
+		RequestUri: "/v1/statement",
+		TrinoQueryProperties: &pb.TrinoQueryProperties{
+			IsNewQuerySubmission: true,
+		},
+	}
+
+	// First call should return an error (panic recovered → INTERNAL).
+	_, err = rc.Route(context.Background(), req)
+	if err == nil {
+		t.Fatal("Route: expected error from panicking evaluator, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("Route: expected gRPC status error, got %T: %v", err, err)
+	}
+	if st.Code() != codes.Internal {
+		t.Errorf("Route: status code = %v, want INTERNAL", st.Code())
+	}
+
+	// Server must still be alive — subsequent calls must succeed (or return the
+	// same recoverable error), not EOF or connection-refused.
+	_, err2 := rc.Route(context.Background(), req)
+	if err2 == nil {
+		// This is fine only if the panic recovery returned a real response —
+		// that can't happen with a panicking evaluator, so treat as unexpected.
+		t.Error("Route second call: expected error, got nil")
+	}
+	st2, _ := status.FromError(err2)
+	// Must not be an Unavailable/transport error — that would indicate server crash.
+	if st2.Code() == codes.Unavailable {
+		t.Errorf("Route second call: server appears to have crashed (Unavailable)")
+	}
+}
+
+// TestGracefulStop_HardStopFallback verifies that when GracefulStop takes
+// longer than the timer fires, the server falls back to a hard Stop and
+// returns promptly. This exercises the server.go:178-181 branch.
+func TestGracefulStop_HardStopFallback(t *testing.T) {
+	cfg := &config.Config{
+		Addr:                ":0",
+		MetricsAddr:         ":0",
+		DefaultRoutingGroup: "default",
+	}
+	// Use a blocking evaluator that never returns (until context cancelled).
+	eval := &slowEvaluator{delay: 10 * time.Second}
+	srv := server.New(cfg, eval, newTestLogger(t))
+
+	addr, _ := startOnFreePort(t, srv)
+
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := conn.Close(); err != nil {
+			t.Logf("conn.Close: %v", err)
+		}
+	})
+	rc := pb.NewTrinoGatewayRouterClient(conn)
+
+	// Start a slow RPC that will be in-flight when Stop is called.
+	go func() {
+		_, _ = rc.Route(context.Background(), &pb.RouteRequest{
+			Method:     "POST",
+			RequestUri: "/v1/statement",
+			TrinoQueryProperties: &pb.TrinoQueryProperties{
+				IsNewQuerySubmission: true,
+			},
+		})
+	}()
+
+	// Give the RPC time to reach the evaluator.
+	time.Sleep(20 * time.Millisecond)
+
+	// Override newTimer to fire immediately (pre-closed channel) so
+	// gracefulStopWithTimeout hits the hard-stop branch without waiting 30s.
+	alreadyFired := make(chan time.Time)
+	close(alreadyFired)
+	restore := server.SetTimerForTest(func(_ time.Duration) <-chan time.Time {
+		return alreadyFired
+	})
+	defer restore()
+
+	// Stop must return promptly (hard-stop path, not 10s blocked drain).
+	done := make(chan struct{})
+	go func() {
+		srv.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Hard-stop returned quickly — pass.
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Stop() did not return within 500ms via hard-stop fallback")
+	}
+}
