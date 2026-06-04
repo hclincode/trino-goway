@@ -3,11 +3,14 @@ module github.com/hclincode/trino-goway-routing-service
 go 1.26.3
 
 require (
+	go.uber.org/goleak v1.3.0
 	google.golang.org/grpc v1.71.1
 	google.golang.org/protobuf v1.36.11
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
+	github.com/stretchr/testify v1.10.0 // indirect
 	go.opentelemetry.io/otel v1.35.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.35.0 // indirect
 	golang.org/x/net v0.35.0 // indirect
