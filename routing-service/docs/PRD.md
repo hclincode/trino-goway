@@ -63,7 +63,7 @@ The two **most-used routing signals in practice are missing from the current pro
 
 Reserved for later (not Phase 1): `RouteResponse.resource_group_hint` (inject as `X-Trino-Resource-Group`), and an optional tenant identifier field if header-derived tenancy proves insufficient. These are additive and need only a field number reserved now.
 
-> **Action for trino-goway:** add `trino_source` + `client_tags` to `RouteRequest`/`TrinoQueryProperties` and populate them in the gRPC `buildProtoRequest`. Tracked as a gateway-side dependency for this project.
+> **Action for trino-goway:** add `trino_source` (field 12) + `client_tags` (field 13) to **`RouteRequest`** and populate them in the gRPC `buildProtoRequest`. Tracked as a gateway-side dependency for this project.
 
 ---
 
