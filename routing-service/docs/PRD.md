@@ -70,7 +70,7 @@ Reserved for later (not Phase 1): `RouteResponse.resource_group_hint` (inject as
 ## 5. Phase 1 scope (gRPC, Go)
 
 1. **gRPC server** implementing `TrinoGatewayRouter.Route` + `grpc.health.v1.Health` (Check + Watch). Insecure transport (matches the gateway client today). Graceful shutdown (`GracefulStop`).
-2. **Rule engine** — declarative YAML rules with **CEL** (`google/cel-go`) conditions:
+2. **Routing-logic engine — pluggable & multi-method (see §6.1):** a `RoutingMethod` provider interface + registry + ordered evaluation pipeline, shipping the `rules`, `template` (Go `text/template`), `script` (Starlark), and `external` (delegate) methods in v1, with a buffer for future methods (`expr`, `wasm`, …) and uniform harness-enforced guardrails. The default `rules` method uses declarative YAML with **CEL** (`google/cel-go`) conditions:
    - Each rule: `name` (req), `priority` (int, default 0), `condition` (CEL→bool), `routing_group` (string) or `routing_group_expr` (CEL→string, computed group name — see §6.1), optional `external_headers` (map).
    - Evaluation matches the Java engine: **all matching rules run in ascending priority; last writer wins** (no first-match short-circuit). Service-level `default_routing_group` for the no-match case.
    - CEL context is a flat struct over the proto: `request.source`, `request.client_tags`, `request.user`, `request.catalog`, `request.schema`, `request.method`, `request.uri`, `request.remote_addr`, `request.body`. CEL chosen for being **sandboxed by construction** (no process/fs/network) and load-time type-checkable.
@@ -121,23 +121,56 @@ rules:
 
 `default_routing_group` here is the *service's* default; it should match the gateway's `routing.defaultGroup` unless the operator intentionally diverges — document the coupling.
 
-### 6.1 Scriptability decision — declarative-first, polyglot for procedural
+### 6.1 Routing-logic methods — pluggable, multi-method, extensible
 
-**Question raised:** should cluster admins author routing logic via an embedded script/expression engine (a Go MVEL-like/templating lib, or Python)?
+**Product decision (overrides the earlier "declarative-only v1" lean):** the service supports **multiple routing-logic methods** — declarative rules, **templating**, and **scripting** — and is **designed so new methods can be added without touching the core** (a buffer for future methods). The earlier discussion's *safety* conclusions are retained, but as **cross-cutting guardrails enforced by the engine harness** rather than a reason to ship only one method.
 
-**Decision (team consensus): no general-purpose embedded scripting engine in v1.** v1 stays declarative — YAML rules + CEL. Rationale and the sanctioned paths:
+#### Architecture — a `RoutingMethod` provider + evaluation pipeline
 
-1. **CEL already covers ~95% of real routing.** Across all seven Java MVEL rule fixtures, every pattern maps cleanly to declarative CEL; the two apparent gaps — the cross-rule `state` map and Java `Optional` wrappers — dissolve in the new model (rewrite as a compound condition; compare plain strings). `state` appears once, pedagogically; **do not model it in v1**.
-2. **One scoped extension covers the dynamic cases:** an optional **`routing_group_expr`** rule field — a CEL expression that *returns* the group name (e.g. `'"etl-" + request.user.split("@")[1]'`) for domain/team-computed groups. Stays inside CEL's sandbox/termination guarantees; it is **not** "scripting."
-3. **For genuinely procedural logic in any language — including Python — use the polyglot gRPC boundary, not an embedded engine.** The gateway↔service contract is already gRPC, so a team can implement `TrinoGatewayRouter` in Python (`grpcio`), JVM, Node, etc. and point trino-goway at it. v1 ships a **Python reference implementation** alongside the Go one. This is the sanctioned "use Python for routing logic" answer — no CGo, no sidecar, no embedded interpreter.
-4. **Why not embed a scripting engine now:**
-   - **Shared-tenant hot path = blast radius.** A buggy/expensive script (ReDoS, runaway loop, heavy allocation) degrades routing latency for *all* tenants, can trip the gateway circuit breaker, and silently falls everyone to the default group.
-   - **Auditability.** A YAML rule diff is reviewable in a PR / at 2 am during an incident; a procedural-script diff requires mentally executing code.
-   - **Security surface.** Every engine version bump must be re-audited for sandbox escapes; needs a threat model.
-   - **Real Python is worst in-process:** embedded CPython (CGo) is non-viable (GIL serialization, ~8 MB RSS/interpreter, 50–200 ms startup); a Python sidecar only adds a hop and is redundant with writing the router in Python directly.
-5. **If a scripting tier is ever added (v2+),** it is gated behind demonstrated demand + a threat-model + sandbox spec, and scoped: **platform-admins only** (never tenant admins), sandbox (no I/O/network), **hard step + wall-clock limits → auto-fallback**, **mandatory dry-run**, **staged % rollout for scripts**, **instant kill-switch** (`DisableScript`), audit, and per-`script_id` error metrics. Engine choice deferred to then: **Starlark** (structural sandbox, `thread.SetMaxSteps`, deterministic) vs **expr-lang/expr** (MVEL-closest syntax, easiest migration); saas-tech-lead prefers staying CEL-only. **Not** Lua/goja (manual sandbox hardening), **not** embedded CPython.
+A single stable internal interface; each method is a provider behind it; a **registry** maps a method `type` → provider factory. This interface **is the extensibility buffer** — a new method is a new provider registration plus a config schema, with zero changes to the gRPC layer, the pipeline, or the guardrails.
 
-**Net answer to "is it a good idea?":** scripting is a footgun in a shared-tenant hot path. Declarative CEL (+ `routing_group_expr`) is the right v1; the **polyglot gRPC router — including a Python reference impl — is the correct home for arbitrary procedural/Python logic**.
+```go
+type Decision struct {
+    RoutingGroup    string            // "" = no opinion / defer to next method
+    ExternalHeaders map[string]string
+    Errors          []string          // hard policy violation only
+    Decided         bool              // true = this method made a definitive call
+}
+
+type RoutingMethod interface {
+    Type() string                                   // "rules" | "template" | "script" | "external" | "wasm" | ...
+    LoadConfig(raw []byte) error                    // parse + VALIDATE; activated only if valid (hot-reload)
+    Evaluate(ctx context.Context, in *RouteInput) (Decision, error)
+}
+```
+
+**Pipeline:** the `Route` RPC runs an **ordered chain** of the enabled methods (order is config). Each returns a `Decision` or "no opinion" (`Decided=false`, empty group); the **first definitive decision wins**; if none decide, the gateway's default group applies. The harness — not the method — enforces the global wall-clock budget, per-method step/time limits, metrics, dry-run, and fallback. This composes cleanly: declarative rules handle 95%, a script/template method handles the long tail, all under one safety envelope.
+
+#### Methods
+
+| `type` | Engine | Phase | Trust class |
+|---|---|---|---|
+| `rules` | Declarative YAML + **CEL** conditions (+ `routing_group_expr` CEL→string) | **v1 (default)** | low — broadly usable, incl. tenant-scoped |
+| `template` | **Go `text/template`** rendering a group name from request attributes (sandboxed: only the funcs we expose; deterministic; no I/O) | **v1** | low |
+| `script` | **Starlark** (`go.starlark.net`) — Python-like, structural sandbox, `thread.SetMaxSteps` step cap, deterministic | **v1** | high — platform-admins only |
+| `external` | Delegate to another gRPC/HTTP router (chains the polyglot escape hatch — e.g. a **Python** `TrinoGatewayRouter` impl) | **v1** | n/a (out-of-process) |
+| `expr` | `expr-lang/expr` — MVEL-closest syntax, for migration familiarity | buffer (opt-in) | high |
+| `wasm` | WebAssembly modules — the strategic "any sandboxed language" plug | **buffer (future)** | high |
+| ML / others | future providers | buffer | per-provider |
+
+The **buffer for new methods** is concrete: (a) the `RoutingMethod` interface + registry; (b) a config `type` discriminator per method; (c) reserved proto/extension fields. `wasm` is the intended long-term answer for "arbitrary language, safely sandboxed, hot-swappable."
+
+#### Cross-cutting guardrails (apply to every method, enforced by the harness)
+
+- **Fail-safe:** any method error/timeout/over-budget → that method is skipped and the chain continues; ultimately the gateway default — never a 5xx to the user.
+- **Resource limits:** global per-request wall-clock budget + per-method step/CPU caps (e.g. Starlark `SetMaxSteps`, `context` deadline + `thread.Cancel`); no I/O/network/syscalls exposed to any in-process method.
+- **Trust tiers:** low-risk methods (`rules`, `template`) authorable within tenant namespaces; high-risk methods (`script`, `wasm`, `expr`) **platform-admins only**. Tenant-namespace isolation enforced at load.
+- **Change safety:** validate-before-activate (keep last-known-good), **mandatory dry-run** (replay candidate config/script against recent or synthetic traffic, show the routing diff), **staged % rollout** for high-risk methods, **instant kill-switch** (a `DisableMethod`/`DisableScript` op with sub-second propagation), full **audit** (author, timestamp, content hash, dry-run reviewed), and per-`method`/`rule_id`/`script_id` **metrics + error alerts**.
+- **No raw SQL in logs** (hash/prefix only).
+
+#### Why this shape
+
+It gives operators the multiple methods you want (declarative + templating + scripting) **today**, keeps the safety envelope the team insisted on (the guardrails live in the harness, so adding a method doesn't reopen the risk), and the provider interface means new methods (`expr`, `wasm`, ML, …) drop in later without a redesign. Full external/other-language logic remains a first-class `external` method (the gRPC boundary is polyglot by design; a **Python reference router** ships in v1).
 
 ---
 
@@ -187,7 +220,7 @@ Gateway-side knobs the operator sets (existing): `routing.external.grpcAddr` (en
 
 1. Tenant identity source for Phase 1 — `X-Trino-User` mapping vs. a gateway-injected `X-Tenant-ID` (proto add)? 
 2. Group-name validation — does the service get the gateway's group registry (config injection / capability endpoint), or only warn on unknown groups?
-3. ~~Is the `state` cross-rule map needed in Phase 1?~~ **RESOLVED (§6.1):** not modeled in v1 — rewrite as compound conditions. Scriptable-routing question also **RESOLVED (§6.1):** declarative + CEL only; polyglot gRPC (incl. Python reference impl) for procedural logic; embedded scripting deferred to v2 behind a threat model.
+3. ~~Is the `state` cross-rule map needed in Phase 1?~~ **RESOLVED (§6.1):** not modeled in the `rules` method — rewrite as compound conditions. Scriptable-routing question **RESOLVED (§6.1):** the engine is pluggable & multi-method — `rules` (CEL) + `template` + `script` (Starlark) ship in v1 under uniform harness guardrails, with a registry buffer for future methods (`expr`, `wasm`) and `external` for polyglot/Python.
 4. Confirm the trino-goway proto additions (§4.1) are in scope for this effort (they require a gateway change + release).
 
 ## 12. Success criteria
