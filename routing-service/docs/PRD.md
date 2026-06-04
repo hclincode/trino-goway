@@ -71,7 +71,7 @@ Reserved for later (not Phase 1): `RouteResponse.resource_group_hint` (inject as
 
 1. **gRPC server** implementing `TrinoGatewayRouter.Route` + `grpc.health.v1.Health` (Check + Watch). Insecure transport (matches the gateway client today). Graceful shutdown (`GracefulStop`).
 2. **Rule engine** — declarative YAML rules with **CEL** (`google/cel-go`) conditions:
-   - Each rule: `name` (req), `priority` (int, default 0), `condition` (CEL→bool), `routing_group` (string), optional `external_headers` (map).
+   - Each rule: `name` (req), `priority` (int, default 0), `condition` (CEL→bool), `routing_group` (string) or `routing_group_expr` (CEL→string, computed group name — see §6.1), optional `external_headers` (map).
    - Evaluation matches the Java engine: **all matching rules run in ascending priority; last writer wins** (no first-match short-circuit). Service-level `default_routing_group` for the no-match case.
    - CEL context is a flat struct over the proto: `request.source`, `request.client_tags`, `request.user`, `request.catalog`, `request.schema`, `request.method`, `request.uri`, `request.remote_addr`, `request.body`. CEL chosen for being **sandboxed by construction** (no process/fs/network) and load-time type-checkable.
    - `state` cross-rule map: documented as a known gap for v1 (most real rules don't need it); add later if demanded.
@@ -80,7 +80,7 @@ Reserved for later (not Phase 1): `RouteResponse.resource_group_hint` (inject as
 5. **Fail-safe behavior** — no rule match → `default_routing_group` (first-class outcome). Invalid/empty config **at startup** → health `NOT_SERVING` (never serve an empty rule set). Treat `is_query_parsing_successful=false` / the `"trino-parser not available"` `error_message` as normal, never as an error signal.
 6. **Validation at load** — group names exist in the operator's group registry (or warn), canary weights sum to 100, no circular references, over-broad conditions warned (not blocked), tenant-scope isolation enforced (see §8).
 7. **Observability** — Prometheus metrics, structured decision logs, OpenTelemetry tracing (see §7).
-8. **Config & ops docs** — README, rule-config reference, and a **migration guide** from MVEL `routing_rules.yml`.
+8. **Config & ops docs** — README, rule-config reference, a **migration guide** from MVEL `routing_rules.yml`, and a **Python reference implementation** of the `TrinoGatewayRouter` contract (the sanctioned path for procedural / other-language routing, §6.1).
 
 ### Later phases (recorded, not committed)
 - **HTTP transport** (the gateway supports both; operators may run both as belt-and-suspenders).
@@ -120,6 +120,24 @@ rules:
 ```
 
 `default_routing_group` here is the *service's* default; it should match the gateway's `routing.defaultGroup` unless the operator intentionally diverges — document the coupling.
+
+### 6.1 Scriptability decision — declarative-first, polyglot for procedural
+
+**Question raised:** should cluster admins author routing logic via an embedded script/expression engine (a Go MVEL-like/templating lib, or Python)?
+
+**Decision (team consensus): no general-purpose embedded scripting engine in v1.** v1 stays declarative — YAML rules + CEL. Rationale and the sanctioned paths:
+
+1. **CEL already covers ~95% of real routing.** Across all seven Java MVEL rule fixtures, every pattern maps cleanly to declarative CEL; the two apparent gaps — the cross-rule `state` map and Java `Optional` wrappers — dissolve in the new model (rewrite as a compound condition; compare plain strings). `state` appears once, pedagogically; **do not model it in v1**.
+2. **One scoped extension covers the dynamic cases:** an optional **`routing_group_expr`** rule field — a CEL expression that *returns* the group name (e.g. `'"etl-" + request.user.split("@")[1]'`) for domain/team-computed groups. Stays inside CEL's sandbox/termination guarantees; it is **not** "scripting."
+3. **For genuinely procedural logic in any language — including Python — use the polyglot gRPC boundary, not an embedded engine.** The gateway↔service contract is already gRPC, so a team can implement `TrinoGatewayRouter` in Python (`grpcio`), JVM, Node, etc. and point trino-goway at it. v1 ships a **Python reference implementation** alongside the Go one. This is the sanctioned "use Python for routing logic" answer — no CGo, no sidecar, no embedded interpreter.
+4. **Why not embed a scripting engine now:**
+   - **Shared-tenant hot path = blast radius.** A buggy/expensive script (ReDoS, runaway loop, heavy allocation) degrades routing latency for *all* tenants, can trip the gateway circuit breaker, and silently falls everyone to the default group.
+   - **Auditability.** A YAML rule diff is reviewable in a PR / at 2 am during an incident; a procedural-script diff requires mentally executing code.
+   - **Security surface.** Every engine version bump must be re-audited for sandbox escapes; needs a threat model.
+   - **Real Python is worst in-process:** embedded CPython (CGo) is non-viable (GIL serialization, ~8 MB RSS/interpreter, 50–200 ms startup); a Python sidecar only adds a hop and is redundant with writing the router in Python directly.
+5. **If a scripting tier is ever added (v2+),** it is gated behind demonstrated demand + a threat-model + sandbox spec, and scoped: **platform-admins only** (never tenant admins), sandbox (no I/O/network), **hard step + wall-clock limits → auto-fallback**, **mandatory dry-run**, **staged % rollout for scripts**, **instant kill-switch** (`DisableScript`), audit, and per-`script_id` error metrics. Engine choice deferred to then: **Starlark** (structural sandbox, `thread.SetMaxSteps`, deterministic) vs **expr-lang/expr** (MVEL-closest syntax, easiest migration); saas-tech-lead prefers staying CEL-only. **Not** Lua/goja (manual sandbox hardening), **not** embedded CPython.
+
+**Net answer to "is it a good idea?":** scripting is a footgun in a shared-tenant hot path. Declarative CEL (+ `routing_group_expr`) is the right v1; the **polyglot gRPC router — including a Python reference impl — is the correct home for arbitrary procedural/Python logic**.
 
 ---
 
@@ -169,7 +187,7 @@ Gateway-side knobs the operator sets (existing): `routing.external.grpcAddr` (en
 
 1. Tenant identity source for Phase 1 — `X-Trino-User` mapping vs. a gateway-injected `X-Tenant-ID` (proto add)? 
 2. Group-name validation — does the service get the gateway's group registry (config injection / capability endpoint), or only warn on unknown groups?
-3. Is the `state` cross-rule map needed in Phase 1, or accept the documented gap?
+3. ~~Is the `state` cross-rule map needed in Phase 1?~~ **RESOLVED (§6.1):** not modeled in v1 — rewrite as compound conditions. Scriptable-routing question also **RESOLVED (§6.1):** declarative + CEL only; polyglot gRPC (incl. Python reference impl) for procedural logic; embedded scripting deferred to v2 behind a threat model.
 4. Confirm the trino-goway proto additions (§4.1) are in scope for this effort (they require a gateway change + release).
 
 ## 12. Success criteria
