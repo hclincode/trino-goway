@@ -14,6 +14,7 @@ import (
 
 	"github.com/hclincode/trino-goway-routing-service/internal/config"
 	"github.com/hclincode/trino-goway-routing-service/internal/engine"
+	exprovider "github.com/hclincode/trino-goway-routing-service/internal/engine/providers/expr"
 	"github.com/hclincode/trino-goway-routing-service/internal/server"
 )
 
@@ -48,7 +49,7 @@ func main() {
 	// the pipeline starts empty and the registry is populated as providers land.
 	// An empty pipeline is valid: every request defers to cfg.DefaultRoutingGroup.
 	reg := engine.NewRegistry()
-	// RS-4 will add: reg.Register("expr", func() engine.RoutingMethod { return exprprovider.New() })
+	reg.Register("expr", func() engine.RoutingMethod { return exprovider.New() })
 	// RS-5 will add: reg.Register("script", func() engine.RoutingMethod { return scriptprovider.New() })
 
 	var methods []engine.RoutingMethod
