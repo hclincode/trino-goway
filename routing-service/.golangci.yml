@@ -1,0 +1,32 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - bodyclose
+    - exhaustive
+    - ineffassign
+    - misspell
+
+settings:
+  exhaustive:
+    default-signifies-exhaustive: true
+
+exclusions:
+  rules:
+    # Generated protobuf stubs are exempt from all linters.
+    - path: ".*\\.pb\\.go"
+      linters:
+        - errcheck
+        - staticcheck
+        - govet
+    - path: ".*_grpc\\.pb\\.go"
+      linters:
+        - errcheck
+        - staticcheck
+        - govet
+  paths:
+    # Exclude the generated stubs directory from lint entirely.
+    - routerpb

@@ -1,0 +1,93 @@
+syntax = "proto3";
+package trino.gateway.v1;
+option go_package = "github.com/hclincode/trino-goway-routing-service/routerpb";
+
+// TrinoGatewayRouter selects a backend routing group for each inbound Trino request.
+service TrinoGatewayRouter {
+  rpc Route(RouteRequest) returns (RouteResponse);
+}
+
+// RouteRequest carries all per-request context the gateway sends on each Route call.
+// Vendored from internal/routing/routerpb/router.proto with two additive Phase 1
+// fields (trino_source=12, client_tags=13) required by the routing-service PRD §4.1.
+// Fields requiring trino-parser (queryType, tables, catalogs, schemas) are always
+// empty in Go v1.
+message RouteRequest {
+  // Populated only when analyzeRequest=true; null otherwise.
+  TrinoQueryProperties trino_query_properties = 1;
+  // Populated only when analyzeRequest=true; null otherwise.
+  TrinoRequestUser trino_request_user = 2;
+  // Always "application/json" in current implementation.
+  string content_type = 3;
+  // HttpServletRequest.getRemoteUser(); may be empty.
+  string remote_user = 4;
+  // HTTP method: "POST", "GET", etc.
+  string method = 5;
+  // Path component only, e.g. "/v1/statement".
+  string request_uri = 6;
+  // URL query string without leading "?"; empty if none.
+  string query_string = 7;
+  // Client IP address.
+  string remote_addr = 9;
+  // Client hostname; may equal remote_addr if no reverse DNS.
+  string remote_host = 10;
+  // URL and form parameters. Multi-valued params are comma-joined.
+  map<string, string> parameter_map = 11;
+  // X-Trino-Source header value (e.g. "airflow", "superset", "dbt").
+  // Phase 1 addition — PRD §4.1. Populated by trino-goway buildProtoRequest (RS-14).
+  string trino_source = 12;
+  // X-Trino-Client-Tags header value, pre-split on comma by the gateway.
+  // Phase 1 addition — PRD §4.1. Populated by trino-goway buildProtoRequest (RS-14).
+  repeated string client_tags = 13;
+  // Field numbers 14–20 reserved for future RouteRequest additions.
+  reserved 14, 15, 16, 17, 18, 19, 20;
+}
+
+// RouteResponse mirrors ExternalRouterResponse.java.
+message RouteResponse {
+  // Routing group name. Empty string or absent → use defaultRoutingGroup.
+  string routing_group = 1;
+  // Error messages. Non-empty + propagateErrors=true → HTTP 400 to client.
+  repeated string errors = 2;
+  // Headers to add or override on the proxied request. Keys in excludeHeaders are ignored.
+  map<string, string> external_headers = 3;
+  // Field numbers 4–10 reserved for future RouteResponse additions.
+  reserved 4, 5, 6, 7, 8, 9, 10;
+}
+
+// TrinoQueryProperties mirrors TrinoQueryProperties.java.
+// Fields requiring trino-parser are always empty in Go v1.
+message TrinoQueryProperties {
+  // Raw SQL text from request body.
+  string body = 1;
+  // Java AST class name (trino-parser required); always empty in Go v1.
+  string query_type = 2;
+  // Resource group classification (trino-parser required); always empty in Go v1.
+  string resource_group_query_type = 3;
+  // X-Trino-Catalog header value; empty if absent.
+  string default_catalog = 4;
+  // X-Trino-Schema header value; empty if absent.
+  string default_schema = 5;
+  // Referenced catalog names (trino-parser required); always empty in Go v1.
+  repeated string catalogs = 6;
+  // Referenced schema names (trino-parser required); always empty in Go v1.
+  repeated string schemas = 7;
+  // "catalog.schema" strings (trino-parser required); always empty in Go v1.
+  repeated string catalog_schemas = 8;
+  // Fully-qualified table names (trino-parser required); always empty in Go v1.
+  repeated string tables = 9;
+  // true if method is POST (new query submission).
+  bool is_new_query_submission = 10;
+  // Always false in Go v1 (no parser).
+  bool is_query_parsing_successful = 11;
+  // Always "trino-parser not available in Go v1".
+  string error_message = 12;
+}
+
+// TrinoRequestUser mirrors TrinoRequestUser.java.
+message TrinoRequestUser {
+  // Username from X-Trino-User header.
+  string user = 1;
+  // Additional user info; empty in Go v1.
+  string user_info = 2;
+}
