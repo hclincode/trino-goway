@@ -22,25 +22,33 @@ import (
 // routeEnv is the type-checked environment struct passed to expr.Compile and
 // expr.Run. All fields exposed to the expression are declared here so that
 // the compiler can enforce type safety and reject invalid field accesses.
+//
+// Programs access the request as lowercase `request` with snake_case fields,
+// matching the documented PRD §6.2 contract:
+//
+//	request.source == "airflow" ? "etl" : ""
+//	"tier=premium" in request.client_tags ? "premium" : ""
 type routeEnv struct {
-	// Request holds the routing request fields.
-	Request requestFields
+	// Request holds the routing request fields, exposed as "request".
+	Request requestFields `expr:"request"`
 }
 
 // requestFields mirrors engine.RouteInput and is the struct accessible as
-// "request" inside an expr program.
+// "request" inside an expr program. All fields are exposed with snake_case
+// names via `expr` struct tags so programs use: request.source,
+// request.client_tags, request.is_new, request.remote_addr, etc.
 type requestFields struct {
-	Source     string
-	ClientTags []string
-	User       string
-	Catalog    string
-	Schema     string
-	Method     string
-	URI        string
-	RemoteAddr string
-	Body       string
-	IsNew      bool
-	ParamMap   map[string]string
+	Source     string            `expr:"source"`
+	ClientTags []string          `expr:"client_tags"`
+	User       string            `expr:"user"`
+	Catalog    string            `expr:"catalog"`
+	Schema     string            `expr:"schema"`
+	Method     string            `expr:"method"`
+	URI        string            `expr:"uri"`
+	RemoteAddr string            `expr:"remote_addr"`
+	Body       string            `expr:"body"`
+	IsNew      bool              `expr:"is_new"`
+	ParamMap   map[string]string `expr:"param_map"`
 }
 
 // Provider implements engine.RoutingMethod using expr-lang/expr.

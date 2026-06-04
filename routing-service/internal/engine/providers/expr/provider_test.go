@@ -110,7 +110,7 @@ func TestLoadConfig_UnknownVariable_ReturnsError(t *testing.T) {
 
 func TestLoadConfig_KeepLastGood_OnFailedReload(t *testing.T) {
 	// Step 1: load a valid program that routes airflow→etl.
-	p := newProvider(t, `Request.Source == "airflow" ? "etl" : ""`)
+	p := newProvider(t, `request.source == "airflow" ? "etl" : ""`)
 
 	in := &engine.RouteInput{Source: "airflow", IsNew: true}
 	d := eval(t, p, in)
@@ -154,7 +154,7 @@ func TestEvaluate_NoProgram_ReturnsDefer(t *testing.T) {
 }
 
 func TestEvaluate_SimpleRoute_Decided(t *testing.T) {
-	p := newProvider(t, `Request.Source == "airflow" ? "etl" : ""`)
+	p := newProvider(t, `request.source == "airflow" ? "etl" : ""`)
 
 	cases := []struct {
 		source  string
@@ -177,7 +177,7 @@ func TestEvaluate_SimpleRoute_Decided(t *testing.T) {
 }
 
 func TestEvaluate_ClientTag_Matching(t *testing.T) {
-	p := newProvider(t, `"tier=premium" in Request.ClientTags ? "premium" : ""`)
+	p := newProvider(t, `"tier=premium" in request.client_tags ? "premium" : ""`)
 
 	withTag := &engine.RouteInput{ClientTags: []string{"tier=premium"}, IsNew: true}
 	without := &engine.RouteInput{ClientTags: []string{"tier=free"}, IsNew: true}
@@ -196,7 +196,7 @@ func TestEvaluate_ClientTag_Matching(t *testing.T) {
 
 func TestEvaluate_HashPct_Deterministic(t *testing.T) {
 	// hashPct is accessible in the program and returns consistent results.
-	p := newProvider(t, `hashPct(Request.User) < 5 ? "canary" : "prod"`)
+	p := newProvider(t, `hashPct(request.user) < 5 ? "canary" : "prod"`)
 
 	in := &engine.RouteInput{User: "alice@example.com", IsNew: true}
 	first := eval(t, p, in)
@@ -215,7 +215,7 @@ func TestEvaluate_HashPct_Deterministic(t *testing.T) {
 
 func TestEvaluate_HashPct_ReachableInEnv(t *testing.T) {
 	// Verify hashPct can be called with various strings without compile error.
-	p := newProvider(t, `hashPct(Request.User) < 100 ? "yes" : "no"`)
+	p := newProvider(t, `hashPct(request.user) < 100 ? "yes" : "no"`)
 	d := eval(t, p, &engine.RouteInput{User: "bob", IsNew: true})
 	if !d.Decided {
 		t.Error("hashPct callable: expected Decided=true for < 100")
@@ -229,10 +229,10 @@ func TestEvaluate_HashPct_ReachableInEnv(t *testing.T) {
 
 func TestEvaluate_PRD_WorkedExample(t *testing.T) {
 	// This is the full worked example from PRD §6.2.
-	program := `Request.Source == "airflow" ? "etl"
-  : Request.Source == "superset" ? (hashPct(Request.User) < 5 ? "interactive-canary" : "interactive")
-  : "tier=premium" in Request.ClientTags ? "premium"
-  : hasSuffix(Request.User, "@analytics.acme.com") ? "etl-" + split(split(Request.User, "@")[1], ".")[0]
+	program := `request.source == "airflow" ? "etl"
+  : request.source == "superset" ? (hashPct(request.user) < 5 ? "interactive-canary" : "interactive")
+  : "tier=premium" in request.client_tags ? "premium"
+  : hasSuffix(request.user, "@analytics.acme.com") ? "etl-" + split(split(request.user, "@")[1], ".")[0]
   : ""`
 
 	p := newProvider(t, program)
@@ -292,17 +292,17 @@ func TestEvaluate_PRD_WorkedExample(t *testing.T) {
 func TestEvaluate_AllRouteInputFields_Accessible(t *testing.T) {
 	// Verify every RouteInput field is accessible without a compile error.
 	programs := []string{
-		`Request.Source == "" ? "x" : ""`,
-		`len(Request.ClientTags) == 0 ? "x" : ""`,
-		`Request.User == "" ? "x" : ""`,
-		`Request.Catalog == "" ? "x" : ""`,
-		`Request.Schema == "" ? "x" : ""`,
-		`Request.Method == "" ? "x" : ""`,
-		`Request.URI == "" ? "x" : ""`,
-		`Request.RemoteAddr == "" ? "x" : ""`,
-		`Request.Body == "" ? "x" : ""`,
-		`Request.IsNew ? "x" : ""`,
-		`Request.ParamMap == nil ? "x" : ""`,
+		`request.source == "" ? "x" : ""`,
+		`len(request.client_tags) == 0 ? "x" : ""`,
+		`request.user == "" ? "x" : ""`,
+		`request.catalog == "" ? "x" : ""`,
+		`request.schema == "" ? "x" : ""`,
+		`request.method == "" ? "x" : ""`,
+		`request.uri == "" ? "x" : ""`,
+		`request.remote_addr == "" ? "x" : ""`,
+		`request.body == "" ? "x" : ""`,
+		`request.is_new ? "x" : ""`,
+		`request.param_map == nil ? "x" : ""`,
 	}
 	for _, prog := range programs {
 		p := exprovider.New()
@@ -317,7 +317,7 @@ func TestEvaluate_AllRouteInputFields_Accessible(t *testing.T) {
 func TestLoadConfig_FromFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "route.expr")
-	if err := os.WriteFile(path, []byte(`Request.Source == "airflow" ? "etl" : ""`), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(`request.source == "airflow" ? "etl" : ""`), 0600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -346,5 +346,53 @@ func TestLoadConfig_NoSourceNorFile_ReturnsError(t *testing.T) {
 	cfg := []byte("type: expr\n")
 	if err := p.LoadConfig(cfg); err == nil {
 		t.Fatal("LoadConfig with no program or file: expected error, got nil")
+	}
+}
+
+// --- PRD §6.2 verbatim compile check ---
+
+// TestEvaluate_PRDExample_CompilesAsWritten verifies that the exact expr program
+// from PRD §6.2 compiles and routes correctly. This is the authoritative proof
+// that the documented operator contract works verbatim — if this test fails, the
+// field naming contract is broken.
+func TestEvaluate_PRDExample_CompilesAsWritten(t *testing.T) {
+	// Exact string from PRD §6.2 — do NOT reformat or rename fields.
+	prdExprProgram := `request.source == "airflow" ? "etl"
+  : request.source == "superset" ? (hashPct(request.user) < 5 ? "interactive-canary" : "interactive")
+  : "tier=premium" in request.client_tags ? "premium"
+  : hasSuffix(request.user, "@analytics.acme.com") ? "etl-" + split(split(request.user, "@")[1], ".")[0]
+  : ""`
+
+	p := exprovider.New()
+	if err := p.LoadConfig(makeConfig(prdExprProgram)); err != nil {
+		t.Fatalf("PRD §6.2 expr example failed to compile: %v\n"+
+			"This means the operator-facing field contract is broken.", err)
+	}
+
+	cases := []struct {
+		source string
+		user   string
+		tags   []string
+		want   string
+	}{
+		{"airflow", "pipe@x.com", nil, "etl"},
+		{"superset", "canonical-non-canary-user-xyz", nil, "interactive"},
+		{"", "", []string{"tier=premium"}, "premium"},
+		{"", "alice@analytics.acme.com", nil, "etl-analytics"},
+		{"dbt", "bob@other.com", nil, ""},
+	}
+	for _, tc := range cases {
+		in := &engine.RouteInput{Source: tc.source, User: tc.user, ClientTags: tc.tags, IsNew: true}
+		d := eval(t, p, in)
+		if tc.want == "" {
+			if d.Decided {
+				t.Errorf("source=%q user=%q: expected defer, got group %q", tc.source, tc.user, d.RoutingGroup)
+			}
+		} else {
+			if !d.Decided || d.RoutingGroup != tc.want {
+				t.Errorf("source=%q user=%q tags=%v: group=%q decided=%v, want %q",
+					tc.source, tc.user, tc.tags, d.RoutingGroup, d.Decided, tc.want)
+			}
+		}
 	}
 }

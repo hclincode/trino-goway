@@ -10,17 +10,19 @@ import (
 	exprovider "github.com/hclincode/trino-goway-routing-service/internal/engine/providers/expr"
 )
 
+// prdWorkedExampleProgram is the exact PRD §6.2 expr program, using the documented
+// lowercase/snake_case field names: request.source, request.user, request.client_tags.
+const prdWorkedExampleProgram = `request.source == "airflow" ? "etl"
+  : request.source == "superset" ? (hashPct(request.user) < 5 ? "interactive-canary" : "interactive")
+  : "tier=premium" in request.client_tags ? "premium"
+  : hasSuffix(request.user, "@analytics.acme.com") ? "etl-" + split(split(request.user, "@")[1], ".")[0]
+  : ""`
+
 // BenchmarkExprEvaluate runs the full PRD §6.2 program and reports p99 latency.
 // This is the standard Go benchmark; use `go test -bench=. -benchtime=5s` to run it.
 func BenchmarkExprEvaluate(b *testing.B) {
-	program := `Request.Source == "airflow" ? "etl"
-  : Request.Source == "superset" ? (hashPct(Request.User) < 5 ? "interactive-canary" : "interactive")
-  : "tier=premium" in Request.ClientTags ? "premium"
-  : hasSuffix(Request.User, "@analytics.acme.com") ? "etl-" + split(split(Request.User, "@")[1], ".")[0]
-  : ""`
-
 	p := exprovider.New()
-	if err := p.LoadConfig(makeConfig(program)); err != nil {
+	if err := p.LoadConfig(makeConfig(prdWorkedExampleProgram)); err != nil {
 		b.Fatalf("LoadConfig: %v", err)
 	}
 
@@ -43,14 +45,8 @@ func BenchmarkExprEvaluate(b *testing.B) {
 // asserts the 99th-percentile is below 50 µs. This catches performance
 // regressions without requiring `go test -bench`.
 func TestExprEvaluate_P99Under50us(t *testing.T) {
-	program := `Request.Source == "airflow" ? "etl"
-  : Request.Source == "superset" ? (hashPct(Request.User) < 5 ? "interactive-canary" : "interactive")
-  : "tier=premium" in Request.ClientTags ? "premium"
-  : hasSuffix(Request.User, "@analytics.acme.com") ? "etl-" + split(split(Request.User, "@")[1], ".")[0]
-  : ""`
-
 	p := exprovider.New()
-	if err := p.LoadConfig(makeConfig(program)); err != nil {
+	if err := p.LoadConfig(makeConfig(prdWorkedExampleProgram)); err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
