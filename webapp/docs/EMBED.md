@@ -4,7 +4,7 @@
 **Owner:** frontend-architect
 **Status:** Plan (docs only — the Go wiring itself is the Go team's task; pairs with Go TODO Phase 10 Task 65)
 
-How the `frontend-app` production bundle maps into the trino-goway gateway's
+How the `webapp` production bundle maps into the trino-goway gateway's
 embedded static UI. This is a plan for the Go side; no Go code is changed by the
 frontend team.
 
@@ -47,11 +47,11 @@ prefix — so they drop in with no rewriting.
 
 ## Mapping plan (Go side)
 
-1. **Copy `frontend-app/dist/` → `cmd/trino-goway/web/dist/`** at Go build time
+1. **Copy `webapp/dist/` → `cmd/trino-goway/web/dist/`** at Go build time
    (replacing the placeholder). Two options:
    - **Build step (recommended):** a Make/script target runs
-     `pnpm -C frontend-app install --frozen-lockfile && pnpm -C frontend-app build`
-     then `rm -rf cmd/trino-goway/web/dist && cp -r frontend-app/dist cmd/trino-goway/web/dist`,
+     `pnpm -C webapp install --frozen-lockfile && pnpm -C webapp build`
+     then `rm -rf cmd/trino-goway/web/dist && cp -r webapp/dist cmd/trino-goway/web/dist`,
      run before `go build`. The existing `//go:embed all:web/dist` then bundles it.
    - **Checked-in artifact (alternative):** commit the built `dist/` under
      `web/dist`. Simpler CI, but couples the bundle to git; not recommended.

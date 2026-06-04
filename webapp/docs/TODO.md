@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-03
 **Owner:** frontend-architect
-**Governs:** `frontend-app/docs/CONVENTIONS.md` (stack + DoD) · `frontend-app/docs/PRD.md` (scope + parity)
+**Governs:** `webapp/docs/CONVENTIONS.md` (stack + DoD) · `webapp/docs/PRD.md` (scope + parity)
 
 Each task is small and independently verifiable. **Every task ends with the DoD
 gate** — it is not done until all four pass:
@@ -19,7 +19,7 @@ to the checklist in `PRD.md`.
 
 ## Phase 0 — Scaffold
 
-- [x] **0.1** Init pnpm project; create Vite + React 19 + TS app under `frontend-app/`.
+- [x] **0.1** Init pnpm project; create Vite + React 19 + TS app under `webapp/`.
   Set Vite `base: '/trino-gateway/'`. **Gate.**
 - [x] **0.2** TypeScript strict config (`strict: true`, `noUncheckedIndexedAccess`,
   path alias `@/` → `src/`). **Gate.**
@@ -223,7 +223,7 @@ to the checklist in `PRD.md`.
 - [x] **6.5** Go-embed/build wiring plan in `docs/EMBED.md` (dist→`web/dist`, wire
   the 3 handlers to the embedded FS, add the SPA-fallback route, hash-router
   fallback documented). Backend-dependency list in `docs/PRD.md`. **Gate.**
-- [x] **6.6** `README.md` for frontend-app (stack, dev/build/test, structure, pages,
+- [x] **6.6** `README.md` for webapp (stack, dev/build/test, structure, pages,
   API notes, embed pointer). **Gate.**
 
 ---

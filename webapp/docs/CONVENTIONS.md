@@ -1,7 +1,7 @@
 # Frontend Conventions — trino-goway web UI
 
 **Date:** 2026-06-03
-**Status:** Locked (governs all `frontend-app/` work)
+**Status:** Locked (governs all `webapp/` work)
 **Owner:** frontend-architect
 
 This document locks the stack, layout, naming, and the Definition of Done for the
@@ -96,7 +96,7 @@ invalidate the relevant query keys (e.g. `saveBackend` → invalidate
 ## Directory layout
 
 ```
-frontend-app/
+webapp/
   docs/                     # this doc, PRD.md, TODO.md, studies/
   public/                   # static assets copied verbatim (logo.svg, favicon)
   src/

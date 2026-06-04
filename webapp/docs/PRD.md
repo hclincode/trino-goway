@@ -3,7 +3,7 @@
 **Date:** 2026-06-03
 **Status:** Draft
 **Owner:** frontend-architect
-**Stack:** locked in `frontend-app/docs/CONVENTIONS.md`
+**Stack:** locked in `webapp/docs/CONVENTIONS.md`
 **Basis:** `docs/studies/webapp-feature-inventory.md`, `docs/studies/webapp-api-and-data-model.md`, `docs/studies/webapp-architecture-stack-and-ux.md`
 
 ---
@@ -254,8 +254,8 @@ The study remains authoritative; this list is the contract.
 | **M5 — Routing Rules** | card-per-rule + inline edit + 204/external + empty states | gates green; routing-rules parity items checked |
 | **M6 — Polish & wiring** | accessibility pass, full test sweep, production build, Go-embed wiring notes | all 60 items verified; DoD green; bundle loads under base path |
 
-See `frontend-app/docs/TODO.md` for the phased, checkbox task breakdown.
+See `webapp/docs/TODO.md` for the phased, checkbox task breakdown.
 
 ---
 
-*Reference: `frontend-app/docs/CONVENTIONS.md` · `frontend-app/docs/studies/*` · `docs/topics/gateway-docs-compatibility-audit.md`*
+*Reference: `webapp/docs/CONVENTIONS.md` · `webapp/docs/studies/*` · `docs/topics/gateway-docs-compatibility-audit.md`*

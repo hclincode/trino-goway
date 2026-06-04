@@ -566,12 +566,12 @@ Every task carries `go vet ./...` + `golangci-lint run ./...` and unit tests; en
 
 ---
 
-## Phase 10: Web UI backend support (frontend-app dependencies)
+## Phase 10: Web UI backend support (webapp dependencies)
 
-Go-side work the rebuilt web UI (`frontend-app/`, modern React) depends on. These realize already-in-scope features (Web UI, admin API, OIDC) — bug-fixes/completions, not new scope (no SCOPE §5 sign-off needed). The rebuilt frontend degrades gracefully without them (see `frontend-app/docs/PRD.md` §API reconciliation); each closes a gap in `docs/topics/gateway-docs-compatibility-audit.md`. Hand-off surfaced by the frontend analysis (`frontend-app/docs/studies/webapp-api-and-data-model.md`).
+Go-side work the rebuilt web UI (`webapp/`, modern React) depends on. These realize already-in-scope features (Web UI, admin API, OIDC) — bug-fixes/completions, not new scope (no SCOPE §5 sign-off needed). The rebuilt frontend degrades gracefully without them (see `webapp/docs/PRD.md` §API reconciliation); each closes a gap in `docs/topics/gateway-docs-compatibility-audit.md`. Hand-off surfaced by the frontend analysis (`webapp/docs/studies/webapp-api-and-data-model.md`).
 
 ### Task 65 — Serve the real UI bundle + SPA fallback
-- [ ] Replace the `cmd/trino-goway/web/dist` placeholder by embedding the `frontend-app` production build output (define the build→embed wiring; the frontend builds with base path `/trino-gateway/`)
+- [ ] Replace the `cmd/trino-goway/web/dist` placeholder by embedding the `webapp` production build output (define the build→embed wiring; the frontend builds with base path `/trino-gateway/`)
 - [ ] Wire `adminUIFS` (currently `_ = adminUIFS`, `main.go:157`) into `serveIndex`/`serveAssets`; implement `serveAssets` (currently a 404 stub, `internal/admin/router.go:213`) to serve embedded static assets
 - [ ] SPA fallback: serve `index.html` for unknown GET sub-paths under the `/trino-gateway` base (browser-router deep links) — without shadowing real API routes
 - [ ] Tests; `go vet ./...` + `golangci-lint run ./...` pass
