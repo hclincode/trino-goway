@@ -38,6 +38,9 @@ type Provider struct {
 	// script is an atomic pointer to the currently-active compiledScript.
 	// nil means no script has been loaded; Evaluate defers in that case.
 	script atomic.Pointer[compiledScript]
+	// stepBudget overrides maxSteps when > 0. Used by CLI tools to adjust
+	// the step limit without touching the production constant.
+	stepBudget uint64
 }
 
 // New returns a new, unconfigured Provider. Register with the engine.Registry:
@@ -45,6 +48,21 @@ type Provider struct {
 //	reg.Register("script", func() engine.RoutingMethod { return script.New() })
 func New() *Provider {
 	return &Provider{}
+}
+
+// SetMaxSteps overrides the per-call step budget for this provider instance.
+// Only the CLI test tool (starlark-test --max-steps) should call this.
+// The production server always uses the default maxSteps constant.
+func (p *Provider) SetMaxSteps(n uint64) {
+	atomic.StoreUint64(&p.stepBudget, n)
+}
+
+// effectiveMaxSteps returns the step budget to use for this call.
+func (p *Provider) effectiveMaxSteps() uint64 {
+	if n := atomic.LoadUint64(&p.stepBudget); n > 0 {
+		return n
+	}
+	return maxSteps
 }
 
 // Type returns "script".
@@ -83,7 +101,7 @@ func (p *Provider) Evaluate(ctx context.Context, in *engine.RouteInput) (engine.
 			return nil, fmt.Errorf("load() is not permitted in routing scripts")
 		},
 	}
-	thread.SetMaxExecutionSteps(maxSteps)
+	thread.SetMaxExecutionSteps(p.effectiveMaxSteps())
 
 	// Start a goroutine that cancels the thread when ctx expires.
 	// The goroutine is always started; it exits as soon as either ctx is done
