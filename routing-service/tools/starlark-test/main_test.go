@@ -126,13 +126,36 @@ def route(req):
   return "etl"
 `)
 	start := time.Now()
-	_, _, code := runBin(t, bin, script, `{"is_new":true}`)
+	stdout, _, code := runBin(t, bin, script, `{"is_new":true}`)
 	elapsed := time.Since(start)
 	if code != toolrun.ExitError {
 		t.Errorf("exit code = %d, want %d (step limit)", code, toolrun.ExitError)
 	}
 	if elapsed > 500*time.Millisecond {
 		t.Errorf("step-limit script took %v in subprocess, want < 500ms", elapsed)
+	}
+	// Assert the output contains the STEP_LIMIT status string.
+	if !strings.Contains(stdout, toolrun.StatusStepLimit) {
+		t.Errorf("stdout %q: missing %q status", stdout, toolrun.StatusStepLimit)
+	}
+}
+
+func TestExitCode_MaxStepsFlag_StepLimit(t *testing.T) {
+	// --max-steps 1 forces step limit on any non-trivial script.
+	bin := buildBinary(t)
+	script := writeScript(t, `
+def route(req):
+  x = 0
+  for i in range(100):
+    x = x + 1
+  return "etl"
+`)
+	stdout, _, code := runBin(t, bin, script, "--max-steps", "1", `{"is_new":true}`)
+	if code != toolrun.ExitError {
+		t.Errorf("exit code = %d, want %d (--max-steps 1 step limit)", code, toolrun.ExitError)
+	}
+	if !strings.Contains(stdout, toolrun.StatusStepLimit) {
+		t.Errorf("stdout %q: missing %q status", stdout, toolrun.StatusStepLimit)
 	}
 }
 
@@ -276,15 +299,19 @@ def route(req):
 	}
 }
 
-func TestExitCode_WrongReturnType_Error(t *testing.T) {
+func TestExitCode_WrongReturnType_RuntimeError(t *testing.T) {
+	// route() returns int instead of string|None → RUNTIME_ERROR: status.
 	bin := buildBinary(t)
 	script := writeScript(t, `
 def route(req):
   return 42
 `)
-	_, _, code := runBin(t, bin, script, `{"is_new":true}`)
+	stdout, _, code := runBin(t, bin, script, `{"is_new":true}`)
 	if code != toolrun.ExitError {
 		t.Errorf("exit code = %d, want %d (wrong return type)", code, toolrun.ExitError)
+	}
+	if !strings.Contains(stdout, toolrun.StatusRuntimeError) {
+		t.Errorf("stdout %q: missing %q status prefix", stdout, toolrun.StatusRuntimeError)
 	}
 }
 

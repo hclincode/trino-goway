@@ -128,6 +128,21 @@ func TestExitCode_TypeMismatch_CompileError(t *testing.T) {
 	}
 }
 
+func TestExitCode_RuntimeError_RuntimeErrorStatus(t *testing.T) {
+	// An out-of-bounds array access is a runtime error (caught by safeEvaluate).
+	// The output must contain RUNTIME_ERROR: and exit 1.
+	bin := buildBinary(t)
+	// client_tags is empty, so index [999] panics at runtime.
+	prog := writeProgram(t, `request.client_tags[999]`)
+	stdout, _, code := runBin(t, bin, prog, `{"is_new":true}`)
+	if code != toolrun.ExitError {
+		t.Errorf("exit code = %d, want %d (runtime error)", code, toolrun.ExitError)
+	}
+	if !strings.Contains(stdout, toolrun.StatusRuntimeError) {
+		t.Errorf("stdout %q: missing %q status prefix", stdout, toolrun.StatusRuntimeError)
+	}
+}
+
 func TestExitCode_InlineProgram_OK(t *testing.T) {
 	bin := buildBinary(t)
 	stdout, _, code := runBin(t, bin,

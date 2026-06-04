@@ -50,11 +50,13 @@ func TestRun_Deferred(t *testing.T) {
 	}
 }
 
-func TestRun_Error(t *testing.T) {
+func TestRun_RuntimeError_HasPrefix(t *testing.T) {
+	// A non-step-limit runtime error must produce "RUNTIME_ERROR: <msg>".
 	eval := &stubEval{err: context.DeadlineExceeded}
 	r := toolrun.Run(context.Background(), eval, &engine.RouteInput{})
-	if r.Status == toolrun.StatusOK || r.Status == toolrun.StatusDeferred {
-		t.Errorf("Status = %q, want error status", r.Status)
+	want := toolrun.StatusRuntimeError + ": " + context.DeadlineExceeded.Error()
+	if r.Status != want {
+		t.Errorf("Status = %q, want %q", r.Status, want)
 	}
 }
 

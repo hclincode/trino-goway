@@ -24,16 +24,17 @@ const (
 
 // Status strings for single-input output.
 const (
-	StatusOK        = "OK"
-	StatusDeferred  = "DEFERRED"
-	StatusStepLimit = "STEP_LIMIT"
+	StatusOK           = "OK"
+	StatusDeferred     = "DEFERRED"
+	StatusStepLimit    = "STEP_LIMIT"
+	StatusRuntimeError = "RUNTIME_ERROR" // prefix; full form: "RUNTIME_ERROR: <msg>"
 )
 
 // Result holds the outcome of a single evaluation.
 type Result struct {
 	Group   string        // routing group, or "" when deferred
 	Latency time.Duration
-	Status  string // OK, DEFERRED, STEP_LIMIT, COMPILE_ERROR: ..., RUNTIME_ERROR: ..., ERROR: ...
+	Status  string // OK | DEFERRED | STEP_LIMIT | RUNTIME_ERROR: <msg>
 }
 
 // PrintSingle prints a single-input result in the documented format:
@@ -121,12 +122,12 @@ func Run(ctx context.Context, eval Evaluator, in *engine.RouteInput) Result {
 
 	if err != nil {
 		msg := err.Error()
-		status := "ERROR: " + msg
 		// Starlark step limit surfaces as "cancelled" or "too many steps" in the error.
 		if containsAny(msg, "too many steps", "cancelled", "cancel", "step") {
-			status = StatusStepLimit
+			return Result{Latency: latency, Status: StatusStepLimit}
 		}
-		return Result{Latency: latency, Status: status}
+		// All other evaluation errors are runtime errors.
+		return Result{Latency: latency, Status: StatusRuntimeError + ": " + msg}
 	}
 
 	if !d.Decided {
