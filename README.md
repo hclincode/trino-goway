@@ -12,6 +12,7 @@ See [docs/USE_STORIES.md](docs/USE_STORIES.md) for what the gateway does and the
 - [Building](#building)
 - [Configuration](#configuration)
 - [Running](#running)
+  - [Metrics](#metrics)
 - [Development tools](#development-tools)
   - [Mock HTTP routing server](#mock-http-routing-server)
   - [Mock gRPC routing server](#mock-grpc-routing-server)
@@ -117,6 +118,29 @@ go build ./cmd/goway-migrate-config
 go build ./cmd/goway-diff-harness
 ```
 
+### Web UI bundle
+
+The gateway embeds the React web UI (`webapp/`) via `//go:embed all:web/dist` in
+`cmd/trino-goway/main.go`. The bundle is **not** committed; build it into the
+embed directory before producing a release binary:
+
+```bash
+# Build the UI (pnpm + Vite, base path /trino-gateway/) and copy it into the
+# Go embed directory, then build the gateway with the bundle baked in.
+make build
+
+# Or just rebuild the UI bundle:
+make webapp
+
+# Restore the embed dir to its placeholder state (UI not bundled):
+make webapp-clean
+```
+
+A plain `go build ./cmd/trino-goway` without a prior `make webapp` still builds
+and runs — the gateway serves a minimal placeholder shell until a real bundle is
+embedded. The UI is served under `/trino-gateway` (SPA deep links fall back to
+`index.html`); static assets are served from `/trino-gateway/assets/*`.
+
 ---
 
 ## Configuration
@@ -155,7 +179,7 @@ Ports (defaults, overridable in config):
 | Purpose | Default |
 |---|---|
 | Trino proxy | 8080 |
-| Admin API + health | 8090 |
+| Admin API + health + metrics | 8090 |
 
 Health endpoints (admin port):
 
@@ -163,6 +187,47 @@ Health endpoints (admin port):
 curl http://localhost:8090/trino-gateway/livez   # always 200
 curl http://localhost:8090/trino-gateway/readyz  # 200 after first monitor tick
 ```
+
+### Metrics
+
+The gateway exposes Prometheus metrics in OpenMetrics format on the **admin port only**
+(never the proxy port). The endpoint is enabled by default at `/metrics`:
+
+```bash
+curl http://localhost:8090/metrics
+```
+
+Configure it under the `metrics:` block (see [configs/config.example.yaml](configs/config.example.yaml)):
+
+```yaml
+metrics:
+  enabled: true     # default true; set false to not register the route (404)
+  path: /metrics    # default; must start with "/"
+```
+
+All gateway metrics use the `trino_goway_*` namespace and are served from a dedicated
+registry (the process does not touch Prometheus' global default registry). Alongside them
+the endpoint exposes the standard Go runtime (`go_*`) and process (`process_*`) collectors —
+the Go-native equivalent of the Java gateway's JVM/process metrics. See
+[docs/topics/gateway-docs-compatibility-audit.md §3.2](docs/topics/gateway-docs-compatibility-audit.md)
+for the full Java→Go metric-name mapping.
+
+Point Prometheus at the **admin** port. Because `/metrics` is unauthenticated (like the
+health probes), keep the admin port off the public internet:
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: trino-goway
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["trino-goway-host:8090"]   # admin port, not the proxy port
+```
+
+> **Note:** per-backend series (`trino_goway_backend_status`,
+> `trino_goway_backend_activation_status`) appear once the monitor has observed a backend,
+> which follows the gateway's backend-refresh cycle (~15s) after a backend is registered —
+> not instantly on registration.
 
 > **Required Trino coordinator setting:** each Trino cluster behind the gateway must have
 > `http-server.process-forwarded=true` in its `config.properties`. Without it the coordinator
@@ -310,6 +375,66 @@ Build tags summary:
 | `integration` | Docker | DB layer tests |
 | `e2e` | Docker | proxy E2E against real Trino |
 | `diff` | Docker | Java↔Go differential harness |
+
+### CI scheduling
+
+The build tags are designed to split a fast per-PR gate from slower Docker-backed
+suites that run on a schedule. Recommended wiring (no workflow files are committed
+yet — this documents the intended split):
+
+| Suite | Command | When it runs | Why |
+|---|---|---|---|
+| Unit + race | `go test -race ./...` | every push / PR | fast (no Docker), gates merge |
+| Integration | `go test -tags=integration ./...` | every PR (Docker runner) | DB-layer tests; Postgres/MySQL containers |
+| E2E | `go test -tags=e2e ./internal/e2e/...` | every PR (Docker runner) | proxy/auth/routing against a real Trino container |
+| Differential | `go test -tags=diff -timeout 20m ./cmd/goway-diff-harness/` | **nightly** (scheduled) | boots Java gateway + Trino + Postgres via testcontainers (~60–90s first boot); too slow and image-heavy for per-PR |
+
+Notes for the CI author:
+
+- The `diff` job is **nightly**, not per-PR. It needs a Docker-enabled runner and
+  outbound pulls for `trinodb/trino-gateway:19`, `trinodb/trino:476`, and
+  `postgres:17-alpine` (pinned in `internal/diffharness/bootstrap.go`). The job is
+  the only one that exercises the Java gateway, so it is where Java↔Go wire drift
+  surfaces. Treat a non-PASS verdict as a release blocker, not a flake — investigate
+  before re-running.
+- The `diff` and `e2e` jobs both `t.Skip` cleanly when Docker is unavailable
+  (`bootstrapOrSkip` / the e2e harness), so running them on a Docker-less runner is
+  a no-op rather than a failure. CI must therefore assert the job actually ran
+  (e.g. check for `--- PASS:` lines), not merely that the command exited 0.
+- The diff harness validates its own scenario discipline at unit speed: the
+  no-Docker `go test ./internal/diffharness/...` run includes
+  `TestCommittedScenarios_LoadAndJustified`, which parses every scenario YAML and
+  enforces a `[JUSTIFIED]` annotation on any file with diff-ignore entries. That
+  guard runs in the per-PR gate, so normalizer drift is caught early even though the
+  live diff only runs nightly. See the normalizer sign-off in
+  `docs/studies/both/diff-normalizer-signoff.qa-tech-lead.md`.
+
+### Linting
+
+```bash
+# Lint the main module (uses the root .golangci.yml)
+golangci-lint run ./...
+
+# Lint the routing-service module (separate Go module, own config)
+cd routing-service && golangci-lint run ./...
+```
+
+The repo has two Go modules, each with its own golangci-lint config:
+
+- **`.golangci.yml`** (root) governs the main module
+  (`github.com/hclincode/trino-goway`).
+- **`routing-service/.golangci.yml`** governs the routing-service module.
+
+Both pin `version: "2"` and the same linter set (§D3 of
+`docs/CODING_CONVENTIONS.md`): `errcheck`, `govet`, `staticcheck`, `bodyclose`,
+`exhaustive`, `ineffassign`, `misspell`. The root config additionally enables the
+built-in `std-error-handling` exclusion preset, which suppresses the unactionable
+`defer resp.Body.Close()` / `fmt.Fprint*` error-return findings the gateway uses by
+convention (in production and tests) — so the per-PR `golangci-lint run ./...` gate
+is uniform instead of being hand-wrangled per file. `bodyclose` is excluded in
+`_test.go` (response bodies on error-path assertions are intentionally not closed);
+it still guards production code. The config is permissive: it was verified to
+introduce zero new findings over the bare-default linter run.
 
 ---
 

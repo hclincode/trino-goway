@@ -6,13 +6,19 @@
 # assigned by testcontainers MappedPort.
 
 serverConfig:
-  node.environment: diff-harness
+  # airlift NodeConfig requires environment to match [a-z0-9][_a-z0-9]* — no
+  # hyphens, so use an underscore here.
+  node.environment: diff_harness
   http-server.http.port: 8080
 
-# Anonymous access — the differential harness drives the gateway directly,
-# we do not exercise OAuth/LDAP paths here.
-authentication:
-  authenticationType: "noop"
+# Anonymous access — the differential harness drives the gateway directly, so
+# we do not configure an `authentication` block at all. In trino-gateway 19 the
+# auth filters (LbFilter / FormAuthenticator / BasicAuthFilter) are only
+# installed when an `oauth:` or `form:` sub-block is present
+# (ChainedAuthFilter#filter); with neither configured the gateway serves
+# anonymously. AuthenticationConfiguration only knows `defaultType`, `oauth`,
+# and `form` — there is NO `authenticationType`/`noop` property in this image,
+# so declaring one makes Jackson fail config parse at boot.
 
 # Backends are seeded post-boot via registerBackend() POSTing to
 # /entity?entityType=GATEWAY_BACKEND. routingRules deliberately disabled so

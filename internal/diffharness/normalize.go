@@ -59,8 +59,11 @@ func Normalize(r Response, policy DiffPolicy, gatewayHost string) Response {
 // If the body is not valid JSON, returns it unchanged — leaving the diff
 // to fail loudly rather than silently corrupting.
 //
-// Supports nested paths via "." separators (e.g. "stats.processedRows").
-// Wildcards are NOT supported; keep the scenario explicit.
+// Supports nested paths via "." separators (e.g. "stats.processedRows") and
+// descends into JSON arrays: a dotted path is applied to every element of any
+// array encountered along the way, so an array-of-objects body (e.g.
+// /gateway/backend/all → [{...},{...}]) has the named field stripped from each
+// element. Wildcards are NOT supported; keep the scenario explicit.
 func stripJSONFields(body []byte, fields []string) []byte {
 	if len(body) == 0 {
 		return body
@@ -79,24 +82,34 @@ func stripJSONFields(body []byte, fields []string) []byte {
 	return out
 }
 
-// deleteJSONPath walks node along path and deletes the final key.
-// Returns the (possibly modified) root.
+// deleteJSONPath walks node along path and deletes the final key. It descends
+// into both objects and arrays: when node is an array, the (remaining) path is
+// applied to each element; when node is an object, the path's head key is
+// followed. Returns the (possibly modified) root.
 func deleteJSONPath(node any, path []string) any {
 	if len(path) == 0 || node == nil {
 		return node
 	}
-	m, ok := node.(map[string]any)
-	if !ok {
+	switch n := node.(type) {
+	case []any:
+		// Apply the path to every element so list endpoints normalize too.
+		for i, elem := range n {
+			n[i] = deleteJSONPath(elem, path)
+		}
+		return n
+	case map[string]any:
+		if len(path) == 1 {
+			delete(n, path[0])
+			return n
+		}
+		if child, ok := n[path[0]]; ok {
+			n[path[0]] = deleteJSONPath(child, path[1:])
+		}
+		return n
+	default:
+		// Scalar (or unsupported) node: nothing to delete here.
 		return node
 	}
-	if len(path) == 1 {
-		delete(m, path[0])
-		return m
-	}
-	if child, ok := m[path[0]]; ok {
-		m[path[0]] = deleteJSONPath(child, path[1:])
-	}
-	return m
 }
 
 func cloneHeaders(h http.Header) http.Header {

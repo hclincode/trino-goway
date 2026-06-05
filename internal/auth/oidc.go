@@ -18,20 +18,22 @@ import (
 // OIDCMiddleware validates Bearer JWTs using a JWKS endpoint.
 // JWKS is fetched once at construction and refreshed in the background every JWKSTTLSecs seconds.
 type OIDCMiddleware struct {
-	cfg    config.OIDCConfig
-	log    *slog.Logger
-	jwks   atomic.Pointer[keyfunc.Keyfunc]
-	cancel context.CancelFunc
-	done   chan struct{}
+	cfg     config.OIDCConfig
+	log     *slog.Logger
+	metrics Metrics
+	jwks    atomic.Pointer[keyfunc.Keyfunc]
+	cancel  context.CancelFunc
+	done    chan struct{}
 }
 
 // NewOIDC creates an OIDCMiddleware, fetches the initial JWKS, and starts the background refresher.
-// The returned middleware is ready to use immediately.
-func NewOIDC(ctx context.Context, cfg config.OIDCConfig, log *slog.Logger) (*OIDCMiddleware, error) {
+// The returned middleware is ready to use immediately. metrics may be nil (no-op).
+func NewOIDC(ctx context.Context, cfg config.OIDCConfig, log *slog.Logger, metrics Metrics) (*OIDCMiddleware, error) {
 	m := &OIDCMiddleware{
-		cfg:  cfg,
-		log:  log,
-		done: make(chan struct{}),
+		cfg:     cfg,
+		log:     log,
+		metrics: orNoop(metrics),
+		done:    make(chan struct{}),
 	}
 
 	if err := m.refresh(ctx); err != nil {
@@ -80,12 +82,14 @@ func (m *OIDCMiddleware) Handler() Middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw := bearerToken(r)
 			if raw == "" {
+				m.metrics.AuthRequest(TypeOIDC, ResultDeny)
 				writeUnauthorized(w, "missing Bearer token")
 				return
 			}
 
 			kfp := m.jwks.Load()
 			if kfp == nil {
+				m.metrics.AuthRequest(TypeOIDC, ResultDeny)
 				writeUnauthorized(w, "JWKS not available")
 				return
 			}
@@ -95,6 +99,7 @@ func (m *OIDCMiddleware) Handler() Middleware {
 			_, err := jwt.ParseWithClaims(raw, claims, kf.Keyfunc)
 			if err != nil {
 				m.log.Debug("auth: oidc: JWT validation failed", "err", err)
+				m.metrics.AuthRequest(TypeOIDC, ResultDeny)
 				writeUnauthorized(w, "invalid token")
 				return
 			}
@@ -106,12 +111,24 @@ func (m *OIDCMiddleware) Handler() Middleware {
 				Name:     sub,
 				MemberOf: memberOf,
 			})
+			m.metrics.AuthRequest(TypeOIDC, ResultAllow)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
 func (m *OIDCMiddleware) refresh(ctx context.Context) error {
+	if err := m.doRefresh(ctx); err != nil {
+		m.metrics.JWKSRefresh(JWKSResultError)
+		return err
+	}
+	m.metrics.JWKSRefresh(JWKSResultSuccess)
+	return nil
+}
+
+// doRefresh performs the JWKS fetch and stores it, also updating the key-count
+// gauge on success. refresh wraps it to record the success/error outcome once.
+func (m *OIDCMiddleware) doRefresh(ctx context.Context) error {
 	k, err := keyfunc.NewDefaultCtx(ctx, []string{m.cfg.JWKSURL})
 	if err != nil {
 		return err
@@ -127,6 +144,7 @@ func (m *OIDCMiddleware) refresh(ctx context.Context) error {
 		return fmt.Errorf("JWKS %q returned no keys", m.cfg.JWKSURL)
 	}
 	m.jwks.Store(&k)
+	m.metrics.JWKSKeys(len(keys))
 	return nil
 }
 

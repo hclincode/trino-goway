@@ -94,6 +94,40 @@ func TestStripJSONFields_EmptyBody_Passthrough(t *testing.T) {
 	assert.Nil(t, got)
 }
 
+// TestStripJSONFields_TopLevelArray strips a field from every element of a
+// top-level JSON array body (e.g. /gateway/backend/all → [{...},{...}]). Before
+// Task #23 this silently no-op'd because deleteJSONPath only handled maps.
+func TestStripJSONFields_TopLevelArray(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`[{"a":1,"keep":2},{"a":3,"keep":4}]`)
+	got := stripJSONFields(body, []string{"a"})
+	assert.JSONEq(t, `[{"keep":2},{"keep":4}]`, string(got),
+		"the named field must be stripped from every array element; other fields preserved")
+}
+
+// TestStripJSONFields_NestedArray strips a dotted path that descends through an
+// object into an array of objects (stats.subStages → [{...}]).
+func TestStripJSONFields_NestedArray(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"stats":{"subStages":[{"t":1,"keep":9},{"t":2,"keep":8}]}}`)
+	got := stripJSONFields(body, []string{"stats.subStages.t"})
+	assert.JSONEq(t, `{"stats":{"subStages":[{"keep":9},{"keep":8}]}}`, string(got),
+		"dotted path must descend object→array and strip the field from each element")
+}
+
+// TestStripJSONFields_MapUnchanged is a regression guard that the array support
+// did not alter the existing object-body behavior.
+func TestStripJSONFields_MapUnchanged(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"id":"q1","stats":{"processedRows":42,"elapsedTimeMillis":99}}`)
+	got := stripJSONFields(body, []string{"stats.processedRows"})
+	assert.JSONEq(t, `{"id":"q1","stats":{"elapsedTimeMillis":99}}`, string(got),
+		"object-body stripping must be unchanged by the array support")
+}
+
 func TestLoadScenario_RoundTrip(t *testing.T) {
 	t.Parallel()
 

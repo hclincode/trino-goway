@@ -179,7 +179,7 @@ func TestOIDC_UnreachableJWKS_FailsFast(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	m, err := NewOIDC(ctx, cfg, quietLogger())
+	m, err := NewOIDC(ctx, cfg, quietLogger(), nil)
 	if m != nil {
 		// Defensive: stop the refresher to keep the test goroutine-clean.
 		m.Stop()
@@ -202,7 +202,7 @@ func TestOIDC_JWKSRefreshFailure_KeepsOldKey(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	m, err := NewOIDC(ctx, cfg, quietLogger())
+	m, err := NewOIDC(ctx, cfg, quietLogger(), nil)
 	require.NoError(t, err)
 	defer m.Stop()
 

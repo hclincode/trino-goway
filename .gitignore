@@ -43,3 +43,11 @@ goway-diff-harness
 mock-external-router
 mock-external-router-grpc
 trino-goway
+
+# Web UI build output copied into the Go embed dir by `make webapp`.
+# Only the .gitkeep is tracked; the built bundle (index.html, assets, logo) is
+# generated and served from the embed dir, with a placeholder fallback in code.
+cmd/trino-goway/web/dist/index.html
+cmd/trino-goway/web/dist/assets/
+cmd/trino-goway/web/dist/logo.svg
+webapp/dist/

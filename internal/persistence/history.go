@@ -15,6 +15,7 @@ import (
 type QueryRecord struct {
 	QueryID      string    `db:"query_id"`
 	BackendURL   string    `db:"backend_url"`
+	ExternalURL  string    `db:"external_url"`
 	UserName     string    `db:"user_name"`
 	Source       string    `db:"source"`
 	RoutingGroup string    `db:"routing_group"`
@@ -34,12 +35,19 @@ type HistoryFilter struct {
 
 // HistoryDAO provides access to the query_history table.
 type HistoryDAO struct {
-	db *sqlx.DB
+	db      *sqlx.DB
+	metrics Metrics
 }
 
-// NewHistoryDAO returns a new HistoryDAO backed by the given database.
-func NewHistoryDAO(db *sqlx.DB) *HistoryDAO {
-	return &HistoryDAO{db: db}
+// NewHistoryDAO returns a new HistoryDAO backed by the given database. An optional
+// Metrics may be supplied to record insert outcomes; the variadic form keeps
+// existing single-argument callers compiling.
+func NewHistoryDAO(db *sqlx.DB, metrics ...Metrics) *HistoryDAO {
+	var m Metrics
+	if len(metrics) > 0 {
+		m = metrics[0]
+	}
+	return &HistoryDAO{db: db, metrics: orNoop(m)}
 }
 
 // Insert records a new query routing entry.
@@ -49,20 +57,23 @@ func (d *HistoryDAO) Insert(ctx context.Context, r QueryRecord) error {
 	switch d.db.DriverName() {
 	case "postgres":
 		query = `
-INSERT INTO query_history (query_id, backend_url, user_name, source, created_at)
-VALUES (:query_id, :backend_url, :user_name, :source, :created_at)
+INSERT INTO query_history (query_id, backend_url, external_url, user_name, source, created_at)
+VALUES (:query_id, :backend_url, :external_url, :user_name, :source, :created_at)
 ON CONFLICT (query_id) DO NOTHING`
 	case "mysql":
 		query = `
-INSERT IGNORE INTO query_history (query_id, backend_url, user_name, source, created_at)
-VALUES (:query_id, :backend_url, :user_name, :source, :created_at)`
+INSERT IGNORE INTO query_history (query_id, backend_url, external_url, user_name, source, created_at)
+VALUES (:query_id, :backend_url, :external_url, :user_name, :source, :created_at)`
 	default:
+		d.metrics.HistoryInsert(ResultError)
 		return fmt.Errorf("persistence: history: insert: unsupported driver %q", d.db.DriverName())
 	}
 
 	if _, err := d.db.NamedExecContext(ctx, query, r); err != nil {
+		d.metrics.HistoryInsert(ResultError)
 		return fmt.Errorf("persistence: history: insert: %w", err)
 	}
+	d.metrics.HistoryInsert(ResultOK)
 	return nil
 }
 
@@ -89,9 +100,9 @@ func (d *HistoryDAO) ListRecent(ctx context.Context, limit int) ([]QueryRecord, 
 	var query string
 	switch d.db.DriverName() {
 	case "postgres":
-		query = `SELECT query_id, backend_url, user_name, source, created_at FROM query_history ORDER BY created_at DESC LIMIT $1`
+		query = `SELECT query_id, backend_url, external_url, user_name, source, created_at FROM query_history ORDER BY created_at DESC LIMIT $1`
 	case "mysql":
-		query = `SELECT query_id, backend_url, user_name, source, created_at FROM query_history ORDER BY created_at DESC LIMIT ?`
+		query = `SELECT query_id, backend_url, external_url, user_name, source, created_at FROM query_history ORDER BY created_at DESC LIMIT ?`
 	default:
 		return nil, fmt.Errorf("persistence: history: list recent: unsupported driver %q", d.db.DriverName())
 	}
@@ -99,6 +110,52 @@ func (d *HistoryDAO) ListRecent(ctx context.Context, limit int) ([]QueryRecord, 
 		return nil, fmt.Errorf("persistence: history: list recent: %w", err)
 	}
 	return records, nil
+}
+
+// DistributionBucket is a per-minute, per-backend query count, used to build the
+// dashboard line chart.
+type DistributionBucket struct {
+	// MinuteStart is the start of the one-minute bucket (UTC).
+	MinuteStart time.Time `db:"minute_start"`
+	BackendURL  string    `db:"backend_url"`
+	QueryCount  int64     `db:"query_count"`
+}
+
+// FindDistribution returns per-minute, per-backend query counts for rows created
+// at or after 'since'. Mirrors Java's findDistribution (FLOOR(created/60) GROUP
+// BY minute, backend_url) but buckets on the created_at timestamp column.
+func (d *HistoryDAO) FindDistribution(ctx context.Context, since time.Time) ([]DistributionBucket, error) {
+	var query string
+	switch d.db.DriverName() {
+	case "postgres":
+		query = `
+SELECT date_trunc('minute', created_at) AS minute_start,
+       backend_url,
+       COUNT(1) AS query_count
+FROM query_history
+WHERE created_at >= $1
+GROUP BY date_trunc('minute', created_at), backend_url
+ORDER BY minute_start`
+	case "mysql":
+		// Truncate to the minute by formatting then reparsing; the resulting
+		// DATETIME scans back into time.Time.
+		query = `
+SELECT DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:00') AS minute_start,
+       backend_url,
+       COUNT(1) AS query_count
+FROM query_history
+WHERE created_at >= ?
+GROUP BY DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:00'), backend_url
+ORDER BY minute_start`
+	default:
+		return nil, fmt.Errorf("persistence: history: find distribution: unsupported driver %q", d.db.DriverName())
+	}
+
+	var buckets []DistributionBucket
+	if err := d.db.SelectContext(ctx, &buckets, query, since.UTC()); err != nil {
+		return nil, fmt.Errorf("persistence: history: find distribution: %w", err)
+	}
+	return buckets, nil
 }
 
 // FindByFilter returns records matching the filter plus total count (for pagination).
@@ -163,13 +220,13 @@ func (d *HistoryDAO) FindByFilter(ctx context.Context, f HistoryFilter) ([]Query
 	var dataQuery string
 	switch d.db.DriverName() {
 	case "mysql":
-		dataQuery = "SELECT query_id, backend_url, user_name, source, created_at FROM query_history" + where +
+		dataQuery = "SELECT query_id, backend_url, external_url, user_name, source, created_at FROM query_history" + where +
 			" ORDER BY created_at DESC LIMIT ? OFFSET ?"
 	default:
 		limitP := fmt.Sprintf("$%d", argIdx)
 		argIdx++
 		offsetP := fmt.Sprintf("$%d", argIdx)
-		dataQuery = "SELECT query_id, backend_url, user_name, source, created_at FROM query_history" + where +
+		dataQuery = "SELECT query_id, backend_url, external_url, user_name, source, created_at FROM query_history" + where +
 			" ORDER BY created_at DESC LIMIT " + limitP + " OFFSET " + offsetP
 	}
 	args = append(args, pageSize, offset)

@@ -134,6 +134,17 @@ auth:
       - profile
       - email
 
+    # --- Web-UI interactive login (authorization-code flow) ---
+    # Absolute URL of this gateway's /oidc/callback, registered with the IdP as an
+    # allowed redirect URI. Required to enable the browser SSO login (/sso). When
+    # omitted, /sso reports "SSO not configured" and only Bearer-token API auth works.
+    redirectUrl: "https://gateway.example.com/oidc/callback"
+
+    # Optional explicit endpoints. When omitted, they are resolved from
+    # {issuerUrl}/.well-known/openid-configuration.
+    # authorizationEndpoint: "https://accounts.example.com/authorize"
+    # tokenEndpoint: "https://accounts.example.com/token"
+
   # --- LDAP (only read when type: LDAP) ---
   ldap:
     # LDAP server URL. Use ldaps:// for TLS.
@@ -162,6 +173,23 @@ auth:
     # Groups matching this regex receive the API role (programmatic access only).
     api: "cn=trino-api,.*"
 
+    # Optional per-role UI page permissions. Maps a role (ADMIN/USER/API) to an
+    # underscore-separated list of page keys that role may see in the web UI
+    # sidebar. The resolved per-user union is returned in /userinfo's permissions.
+    # A role with no entry here grants all pages. Omit the whole block to allow
+    # every page for every role.
+    # pagePermissions:
+    #   ADMIN: "dashboard_cluster_history_routingRules"
+    #   USER: "dashboard_history"
+
+# ---------------------------------------------------------------------------
+# ui — web UI feature flags (surfaced by getUIConfiguration)
+# ---------------------------------------------------------------------------
+ui:
+  # Page keys globally hidden from the web UI sidebar. Page keys:
+  # dashboard, cluster, history, routingRules. Default: none hidden.
+  disablePages: []
+
 # ---------------------------------------------------------------------------
 # cookie — session cookie used to pin multi-statement queries to a backend
 # ---------------------------------------------------------------------------
@@ -178,3 +206,15 @@ cookie:
   # Keep wire format compatible with the Java trino-gateway cookie encoding.
   # Set to false only if all clients are exclusively talking to this Go gateway.
   wireCompat: true
+
+# ---------------------------------------------------------------------------
+# metrics — Prometheus exposition (admin listener only)
+# ---------------------------------------------------------------------------
+metrics:
+  # Expose the Prometheus /metrics endpoint. When false, the route is not
+  # registered and returns 404. Default: true.
+  enabled: true
+
+  # Path the metrics endpoint is mounted at, on the admin listener.
+  # Must start with "/". Default: /metrics.
+  path: /metrics

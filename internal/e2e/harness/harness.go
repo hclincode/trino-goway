@@ -75,6 +75,8 @@ type harnessConfig struct {
 	apiRoleRegex   string
 
 	propagateErrors bool // sets proxy.propagateErrors
+
+	disableMetrics bool // when true, renders metrics.enabled=false
 }
 
 // WithExternalHTTPRouter wires routing.external.url to the given HTTP endpoint.
@@ -107,6 +109,12 @@ func WithCookieSecret(secret string) Option {
 // WithMonitorInterval overrides monitor.interval (default 2s in the harness).
 func WithMonitorInterval(d time.Duration) Option {
 	return func(c *harnessConfig) { c.monitorInterval = d }
+}
+
+// WithMetricsDisabled renders metrics.enabled=false so the /metrics route is not
+// registered (the path returns 404).
+func WithMetricsDisabled() Option {
+	return func(c *harnessConfig) { c.disableMetrics = true }
 }
 
 // WithSkipReadyzWait makes New() skip polling /trino-gateway/readyz after
@@ -560,6 +568,7 @@ func buildConfig(c *harnessConfig) (string, error) {
 		"AdminRoleRegex":   c.adminRoleRegex,
 		"UserRoleRegex":    c.userRoleRegex,
 		"APIRoleRegex":     c.apiRoleRegex,
+		"DisableMetrics":   c.disableMetrics,
 	}
 	var out bytes.Buffer
 	if err := tmpl.Execute(&out, data); err != nil {
@@ -629,4 +638,8 @@ cookie:
   secret: "{{.CookieSecret}}"
 {{- end}}
   wireCompat: true
+{{- if .DisableMetrics}}
+metrics:
+  enabled: false
+{{- end}}
 `

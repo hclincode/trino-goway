@@ -18,7 +18,7 @@ import (
 type ProxyBackend struct {
 	Name         string `json:"name"`
 	ProxyTo      string `json:"proxyTo"`
-	ExternalURL  string `json:"externalUrl,omitempty"`
+	ExternalURL  string `json:"externalUrl"`
 	Active       bool   `json:"active"`
 	RoutingGroup string `json:"routingGroup"`
 }
@@ -32,13 +32,26 @@ type BackendResponse struct {
 }
 
 // proxyBackendFromPersistence maps a persistence.Backend to a ProxyBackend.
+// externalUrl falls back to the proxyTo URL when unset, matching Java's
+// ProxyBackendConfiguration.getExternalUrl().
 func proxyBackendFromPersistence(b persistence.Backend) ProxyBackend {
 	return ProxyBackend{
 		Name:         b.Name,
 		ProxyTo:      b.URL,
+		ExternalURL:  externalURLOrProxyTo(b.ExternalURL, b.URL),
 		Active:       b.Active,
 		RoutingGroup: b.RoutingGroup,
 	}
+}
+
+// externalURLOrProxyTo returns externalURL when set, otherwise proxyTo.
+// Java's getExternalUrl() returns getProxyTo() when externalUrl is null, so the
+// field is always populated on the wire.
+func externalURLOrProxyTo(externalURL, proxyTo string) string {
+	if externalURL == "" {
+		return proxyTo
+	}
+	return externalURL
 }
 
 // backendResponseFromPersistence maps a persistence.Backend to a BackendResponse with live status.
@@ -70,6 +83,7 @@ func persistenceBackendFromProxy(pb ProxyBackend) persistence.Backend {
 	return persistence.Backend{
 		Name:         pb.Name,
 		URL:          pb.ProxyTo,
+		ExternalURL:  pb.ExternalURL,
 		RoutingGroup: pb.RoutingGroup,
 		Active:       pb.Active,
 		CreatedAt:    now,

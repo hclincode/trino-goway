@@ -14,13 +14,19 @@ type QueryDetail struct {
 	User         string `json:"user"`
 	Source       string `json:"source"`
 	BackendURL   string `json:"backendUrl"`
-	CaptureTime  int64  `json:"captureTime"`  // epoch milliseconds
+	CaptureTime  int64  `json:"captureTime"` // epoch milliseconds
 	RoutingGroup string `json:"routingGroup"`
 	ExternalURL  string `json:"externalUrl"`
 }
 
 // queryDetailFromRecord converts a persistence.QueryRecord to a QueryDetail.
+// externalUrl falls back to backendUrl when unset so deeplinks resolve for rows
+// captured before external_url was recorded, matching the backend wire shape.
 func queryDetailFromRecord(r persistence.QueryRecord) QueryDetail {
+	externalURL := r.ExternalURL
+	if externalURL == "" {
+		externalURL = r.BackendURL
+	}
 	return QueryDetail{
 		QueryID:      r.QueryID,
 		QueryText:    r.QueryText,
@@ -29,6 +35,7 @@ func queryDetailFromRecord(r persistence.QueryRecord) QueryDetail {
 		BackendURL:   r.BackendURL,
 		CaptureTime:  r.CreatedAt.UnixMilli(),
 		RoutingGroup: r.RoutingGroup,
+		ExternalURL:  externalURL,
 	}
 }
 

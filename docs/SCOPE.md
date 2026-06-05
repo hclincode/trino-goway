@@ -23,6 +23,7 @@
 | Admin REST API | All routes and `@RolesAllowed` roles (`ADMIN`/`USER`/`API`) from Java surface; spec from `docs/studies/trino-gateway/admin-api-surface.java-analyst.md` (Task 16) |
 | Web UI | Serve existing Java-compiled static bundle unchanged; embed compiled `webapp/` assets via `//go:embed`; no UI rewrite |
 | Config migration tool — `goway-migrate-config` | One-shot binary: Java YAML → Go YAML; config compat is loose, not strict |
+| Prometheus metrics endpoint | OpenMetrics exposition on the admin listener (configurable via `metrics.{enabled,path}`), covering Go runtime/process, HTTP server, proxy/forwarding, backend health/activation, routing/recovery-chain, and auth/persistence metrics under the `trino_goway_*` namespace; dedicated registry (no global default). Added per team-lead §5 sign-off — see §5 changelog |
 
 ---
 
@@ -116,3 +117,7 @@ Any change to sections 1 or 2 requires all three of the following in the same gi
 3. **Updated `docs/SCOPE.md`** reflecting the new ruling.
 
 Changes that arrive without all three artifacts will be reverted.
+
+### Changelog
+
+- **2026-06-05 — Added "Prometheus metrics endpoint" to §1 (Locked In Scope).** Team-lead sign-off granted. Rationale: this reconciles SCOPE to shipped-and-locked reality rather than expanding scope — `PRD.md` §Key Architecture Decisions already locks `prometheus/client_golang`, the docs-compatibility audit flags it (§3.2, now marked RESOLVED), and Phase 9 (Tasks 56–63) implemented the endpoint and verified it end-to-end (`internal/e2e/metrics_e2e_test.go`, passing against a real Postgres fleet). Rationale docs: `docs/PRD.md` §Key Architecture Decisions and `docs/topics/gateway-docs-compatibility-audit.md` §3.2.

@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -21,8 +22,8 @@ var killQueryRE = regexp.MustCompile(`(?i)KILL\s+QUERY\s+'([0-9]+_[0-9]+_[0-9]+_
 // RouteInput holds all fields needed to select a backend for an inbound request.
 // Constructed by the proxy layer before calling Router.Route.
 type RouteInput struct {
-	Method     string
-	RequestURI string
+	Method      string
+	RequestURI  string
 	QueryString string
 	RemoteAddr  string
 	RemoteHost  string
@@ -67,7 +68,23 @@ type RouteResult struct {
 	RoutingGroup    string
 	ExternalHeaders map[string]string
 	Errors          []string
+	// Outcome classifies how the backend was selected, for metrics. One of
+	// OutcomeOK, OutcomeFallback, or OutcomeKillQuery. The proxy records
+	// OutcomeError itself when no backend could be selected.
+	Outcome string
 }
+
+// Route outcome classifications, recorded on RouteResult.Outcome.
+const (
+	// OutcomeOK is a normal selection: cache hit or external router resolved a group.
+	OutcomeOK = "ok"
+	// OutcomeFallback is selection via the default group or the recovery chain.
+	OutcomeFallback = "fallback"
+	// OutcomeKillQuery is KILL QUERY routing to the query's owning backend.
+	OutcomeKillQuery = "kill_query"
+	// OutcomeError is recorded by the proxy when no backend could be selected.
+	OutcomeError = "error"
+)
 
 // Router orchestrates external routing selector + 3-step recovery chain.
 type Router struct {
@@ -78,16 +95,18 @@ type Router struct {
 	cache        *queryCache
 	recovery     *recoveryChain
 	backends     BackendLister // for group → backend resolution
+	metrics      RouterMetrics
 }
 
 // Config is the routing package's constructor config type.
 type Config struct {
-	Routing         config.RoutingConfig
-	ExternalClient  *http.Client // routerClient — never shared with proxy or monitor
-	ProbeClient     *http.Client // monitorClient re-used for HEAD probes (ok: same timeout profile)
-	History         HistoryLookup
-	Backends        BackendLister
-	Log             *slog.Logger
+	Routing        config.RoutingConfig
+	ExternalClient *http.Client // routerClient — never shared with proxy or monitor
+	ProbeClient    *http.Client // monitorClient re-used for HEAD probes (ok: same timeout profile)
+	History        HistoryLookup
+	Backends       BackendLister
+	Metrics        RouterMetrics // nil-safe: defaults to a no-op recorder
+	Log            *slog.Logger
 }
 
 // New constructs a Router. Returns an error if gRPC dial fails.
@@ -102,6 +121,11 @@ func New(cfg Config) (*Router, error) {
 		return nil, err
 	}
 
+	m := cfg.Metrics
+	if m == nil {
+		m = noopMetrics{}
+	}
+
 	return &Router{
 		cfg:          cfg.Routing,
 		log:          cfg.Log,
@@ -112,8 +136,10 @@ func New(cfg Config) (*Router, error) {
 			history:     cfg.History,
 			backends:    cfg.Backends,
 			probeClient: cfg.ProbeClient,
+			metrics:     m,
 		},
 		backends: cfg.Backends,
+		metrics:  m,
 	}, nil
 }
 
@@ -129,7 +155,8 @@ func (r *Router) Route(ctx context.Context, req *RouteInput) (*RouteResult, erro
 	if queryID := extractKillQueryID(req.Body); queryID != "" {
 		if url := r.recovery.recoverBackend(ctx, queryID); url != "" {
 			r.log.Debug("routing: kill query → history backend", "queryId", queryID, "backend", url)
-			return &RouteResult{BackendURL: url}, nil
+			r.metrics.KillQueryRoute()
+			return &RouteResult{BackendURL: url, Outcome: OutcomeKillQuery}, nil
 		}
 	}
 
@@ -137,8 +164,10 @@ func (r *Router) Route(ctx context.Context, req *RouteInput) (*RouteResult, erro
 	if queryID := extractQueryID(req); queryID != "" {
 		if url, ok := r.cache.get(queryID); ok {
 			r.log.Debug("routing: cache hit", "queryId", queryID, "backend", url)
-			return &RouteResult{BackendURL: url}, nil
+			r.metrics.CacheEvent(CacheEventHit)
+			return &RouteResult{BackendURL: url, Outcome: OutcomeOK}, nil
 		}
+		r.metrics.CacheEvent(CacheEventMiss)
 	}
 
 	// Step 3: External routing service.
@@ -148,8 +177,10 @@ func (r *Router) Route(ctx context.Context, req *RouteInput) (*RouteResult, erro
 	}
 
 	// Step 4: Resolve group → backend URL.
+	outcome := OutcomeOK
 	if group == "" {
 		group = r.cfg.DefaultGroup
+		outcome = OutcomeFallback
 	}
 	backendURL, err := r.resolveGroup(ctx, group)
 	if err != nil || backendURL == "" {
@@ -157,11 +188,17 @@ func (r *Router) Route(ctx context.Context, req *RouteInput) (*RouteResult, erro
 		if queryID := extractQueryID(req); queryID != "" {
 			if url := r.recovery.recoverBackend(ctx, queryID); url != "" {
 				r.log.Debug("routing: recovery chain succeeded", "queryId", queryID, "backend", url)
-				return &RouteResult{BackendURL: url, ExternalHeaders: extHeaders, Errors: errs}, nil
+				return &RouteResult{
+					BackendURL:      url,
+					ExternalHeaders: extHeaders,
+					Errors:          errs,
+					Outcome:         OutcomeFallback,
+				}, nil
 			}
 		}
 		// Final fallback: first active backend regardless of group.
 		backendURL, _ = r.firstActiveBackend(ctx)
+		outcome = OutcomeFallback
 	}
 
 	return &RouteResult{
@@ -169,6 +206,7 @@ func (r *Router) Route(ctx context.Context, req *RouteInput) (*RouteResult, erro
 		RoutingGroup:    group,
 		ExternalHeaders: extHeaders,
 		Errors:          errs,
+		Outcome:         outcome,
 	}, nil
 }
 
@@ -183,14 +221,31 @@ func (r *Router) WriteCache(queryID, backendURL string) {
 // ExcludeHeaders are filtered from the externalHeaders response before returning.
 func (r *Router) callExternal(ctx context.Context, req *RouteInput) (string, map[string]string, []string, error) {
 	if r.grpcSelector != nil {
+		start := time.Now()
 		group, headers, errs, err := r.grpcSelector.selectGroup(ctx, req)
+		r.metrics.RouterCall(TransportGRPC, routerOutcome(err), time.Since(start).Seconds())
 		if err == nil {
 			return group, r.filterExcludedHeaders(headers), errs, nil
 		}
 		r.log.Warn("routing: grpc selector failed", "err", err)
 	}
+	start := time.Now()
 	group, headers, errs, err := r.httpSelector.selectGroup(ctx, req)
+	r.metrics.RouterCall(TransportHTTP, routerOutcome(err), time.Since(start).Seconds())
 	return group, r.filterExcludedHeaders(headers), errs, err
+}
+
+// routerOutcome classifies an external routing call result into a metric label.
+// A deadline-exceeded error is reported as "timeout"; any other error as "error".
+func routerOutcome(err error) string {
+	switch {
+	case err == nil:
+		return RouterOutcomeOK
+	case errors.Is(err, context.DeadlineExceeded):
+		return RouterOutcomeTimeout
+	default:
+		return RouterOutcomeError
+	}
 }
 
 // filterExcludedHeaders removes any key in cfg.External.ExcludeHeaders from the
