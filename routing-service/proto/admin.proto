@@ -1,0 +1,60 @@
+syntax = "proto3";
+package trino.gateway.v1;
+option go_package = "github.com/hclincode/trino-goway-routing-service/routerpb";
+
+// RoutingServiceAdmin is the runtime control-plane for the routing-service.
+// It exposes the pipeline kill-switch so a platform operator can disable or
+// re-enable a routing method at runtime without a restart — changes take
+// effect on the very next Route call (atomic, sub-millisecond propagation).
+//
+// SECURITY (Phase 1): this service has NO authentication. It must be served on
+// a separate, firewalled admin listener (cfg.AdminAddr) reachable only by
+// platform operators. Phase 2 adds mTLS + a scoped admin credential; see the
+// routing-service PRD backlog.
+service RoutingServiceAdmin {
+  // DisableMethod marks the named routing method disabled. The pipeline skips
+  // it on the next Route call; the method's compiled program stays resident so
+  // EnableMethod is instantaneous. Disabling an unknown type is a no-op.
+  rpc DisableMethod(DisableMethodRequest) returns (DisableMethodResponse);
+
+  // EnableMethod re-enables a previously-disabled method. Enabling a method
+  // that is not disabled (or is unknown) is a no-op.
+  rpc EnableMethod(EnableMethodRequest) returns (EnableMethodResponse);
+
+  // ListDisabled returns the type names of all currently-disabled methods.
+  rpc ListDisabled(ListDisabledRequest) returns (ListDisabledResponse);
+}
+
+// DisableMethodRequest names the method type to disable, e.g. "expr" or "script".
+message DisableMethodRequest {
+  string type = 1;
+}
+
+message DisableMethodResponse {
+  // ok is true when the call was accepted. It is true even for an unknown type
+  // (the operation is idempotent / best-effort); inspect message for detail.
+  bool ok = 1;
+  // message is a human-readable result, e.g. "disabled" or "unknown method type".
+  string message = 2;
+  // disabled is the full set of disabled method types after the operation.
+  repeated string disabled = 3;
+}
+
+// EnableMethodRequest names the method type to re-enable.
+message EnableMethodRequest {
+  string type = 1;
+}
+
+message EnableMethodResponse {
+  bool ok = 1;
+  string message = 2;
+  // disabled is the full set of disabled method types after the operation.
+  repeated string disabled = 3;
+}
+
+message ListDisabledRequest {}
+
+message ListDisabledResponse {
+  // disabled is the type names of all currently-disabled methods.
+  repeated string disabled = 1;
+}

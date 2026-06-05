@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# generate.sh — regenerate Go stubs from proto/router.proto.
+# generate.sh — regenerate Go stubs from proto/*.proto.
 # Run from routing-service/: ./proto/generate.sh
 set -euo pipefail
 
@@ -13,6 +13,6 @@ protoc \
   --go_opt=paths=source_relative \
   --go-grpc_out="$REPO_ROOT/routerpb" \
   --go-grpc_opt=paths=source_relative \
-  router.proto
+  router.proto admin.proto
 
 echo "Generated stubs in routerpb/"

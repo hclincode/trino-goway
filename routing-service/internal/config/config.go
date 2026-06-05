@@ -49,6 +49,11 @@ type Config struct {
 	Addr string `yaml:"addr"`
 	// MetricsAddr is the HTTP address for the /metrics endpoint. Default: ":9091".
 	MetricsAddr string `yaml:"metricsAddr"`
+	// AdminAddr is the gRPC listen address for the RoutingServiceAdmin
+	// kill-switch service. Default: ":9092". It is served on a SEPARATE listener
+	// from Addr so it can be firewalled to platform operators only (no auth in
+	// Phase 1).
+	AdminAddr string `yaml:"adminAddr"`
 	// DefaultRoutingGroup is returned when all methods defer (return empty/"").
 	// Must be non-empty.
 	DefaultRoutingGroup string `yaml:"defaultRoutingGroup"`
@@ -79,6 +84,7 @@ func defaultConfig() *Config {
 	return &Config{
 		Addr:        ":9001",
 		MetricsAddr: ":9091",
+		AdminAddr:   ":9092",
 	}
 }
 
@@ -94,6 +100,9 @@ func defaultConfig() *Config {
 func applyDefaults(cfg *Config) {
 	if cfg.MetricsAddr == "" {
 		cfg.MetricsAddr = ":9091"
+	}
+	if cfg.AdminAddr == "" {
+		cfg.AdminAddr = ":9092"
 	}
 }
 

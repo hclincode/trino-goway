@@ -42,6 +42,7 @@ func main() {
 	log.Info("routing-service: starting",
 		"addr", cfg.Addr,
 		"metricsAddr", cfg.MetricsAddr,
+		"adminAddr", cfg.AdminAddr,
 		"defaultGroup", cfg.DefaultRoutingGroup,
 		"methodCount", len(cfg.Methods),
 	)
@@ -83,8 +84,21 @@ func main() {
 	}
 	defer watcher.Stop()
 
+	// RS-8: kill-switch. Serve the RoutingServiceAdmin control plane on a
+	// SEPARATE listener (cfg.AdminAddr) so it can be firewalled to platform
+	// operators. It drives the pipeline's atomic Disable/Enable; changes take
+	// effect on the next Route call without a restart.
+	admin := server.NewAdmin(pipeline, log)
+	adminErr := make(chan error, 1)
+	go func() { adminErr <- admin.Start(ctx, cfg.AdminAddr) }()
+	defer admin.Stop()
+
 	if err := srv.Start(ctx); err != nil {
 		log.Error("routing-service: server error", "err", err)
+		os.Exit(1)
+	}
+	if err := <-adminErr; err != nil {
+		log.Error("routing-service: admin server error", "err", err)
 		os.Exit(1)
 	}
 	log.Info("routing-service: stopped")
