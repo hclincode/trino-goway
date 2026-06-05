@@ -345,3 +345,69 @@ func TestDisabledMethod_Type_DelegatesInner(t *testing.T) {
 		t.Errorf("DisabledMethods() = %v, want [expr]", names)
 	}
 }
+
+// --- EvaluateResult (RS-9 observability-rich entry point) ---
+
+func TestEvaluateResult_Decided(t *testing.T) {
+	first := newSpy("expr", "etl")
+	second := newSpy("script", "batch")
+	p := newPipeline([]engine.RoutingMethod{first, second}, "default")
+
+	res := p.EvaluateResult(context.Background(), &engine.RouteInput{IsNew: true})
+	if !res.Decided || res.RoutingGroup != "etl" || res.MethodType != "expr" {
+		t.Errorf("EvaluateResult = %+v, want {etl expr decided}", res)
+	}
+	if res.HadError {
+		t.Errorf("HadError = true, want false")
+	}
+	if n := second.calls.Load(); n != 0 {
+		t.Errorf("second.calls = %d, want 0 (first decided)", n)
+	}
+}
+
+func TestEvaluateResult_Fallback(t *testing.T) {
+	p := newPipeline([]engine.RoutingMethod{newDeferSpy("expr"), newDeferSpy("script")}, "default")
+	res := p.EvaluateResult(context.Background(), &engine.RouteInput{IsNew: true})
+	if res.Decided || res.MethodType != "" || res.RoutingGroup != "default" {
+		t.Errorf("EvaluateResult = %+v, want {default \"\" not-decided}", res)
+	}
+	if res.HadError {
+		t.Errorf("HadError = true, want false on clean fallback")
+	}
+}
+
+func TestEvaluateResult_ErrorThenDecide(t *testing.T) {
+	// First method errors (skipped), second decides; HadError must be true.
+	p := newPipeline([]engine.RoutingMethod{newErrSpy("expr"), newSpy("script", "batch")}, "default")
+	res := p.EvaluateResult(context.Background(), &engine.RouteInput{IsNew: true})
+	if !res.Decided || res.RoutingGroup != "batch" || res.MethodType != "script" {
+		t.Errorf("EvaluateResult = %+v, want {batch script decided}", res)
+	}
+	if !res.HadError {
+		t.Errorf("HadError = false, want true (first method errored)")
+	}
+}
+
+func TestEvaluateResult_ErrorThenFallback(t *testing.T) {
+	// Only method errors → fallback to default, HadError true.
+	p := newPipeline([]engine.RoutingMethod{newErrSpy("expr")}, "default")
+	res := p.EvaluateResult(context.Background(), &engine.RouteInput{IsNew: true})
+	if res.Decided || res.RoutingGroup != "default" {
+		t.Errorf("EvaluateResult = %+v, want {default not-decided}", res)
+	}
+	if !res.HadError {
+		t.Errorf("HadError = false, want true")
+	}
+}
+
+func TestEvaluateResult_SkipsDisabled(t *testing.T) {
+	first := newSpy("expr", "etl")
+	second := newSpy("script", "batch")
+	p := newPipeline([]engine.RoutingMethod{first, second}, "default")
+	p.DisableMethod("expr")
+
+	res := p.EvaluateResult(context.Background(), &engine.RouteInput{IsNew: true})
+	if res.MethodType != "script" || res.RoutingGroup != "batch" {
+		t.Errorf("EvaluateResult = %+v, want script/batch (expr disabled)", res)
+	}
+}

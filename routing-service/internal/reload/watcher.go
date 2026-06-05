@@ -54,6 +54,14 @@ type ConfigWatcher struct {
 	// outcome is recorded). Tests set this to observe reload timing/coalescing.
 	reloadHook func()
 
+	// reloadSink, if non-nil, is invoked with the reload outcome (true=ok) so the
+	// caller can record a metric. Keeps the reload package free of a metrics dep.
+	reloadSink func(ok bool)
+
+	// versionSink, if non-nil, is invoked with the new config hash after a
+	// successful swap so the caller can update the active config version.
+	versionSink func(hash string)
+
 	// done is closed when the watcher goroutine has fully exited.
 	done chan struct{}
 
@@ -86,6 +94,16 @@ func (w *ConfigWatcher) ReloadCount() int64 { return w.reloadCount.Load() }
 // SetReloadHook installs a function invoked at the end of every reload(). It is
 // intended for tests; production code leaves it nil. Call before Start.
 func (w *ConfigWatcher) SetReloadHook(fn func()) { w.reloadHook = fn }
+
+// SetReloadSink wires a reload-outcome callback (true=ok, false=error) so the
+// caller can record a metric. The reload package stays free of a metrics
+// dependency; main.go adapts *metrics.Metrics into this callback. Call before Start.
+func (w *ConfigWatcher) SetReloadSink(fn func(ok bool)) { w.reloadSink = fn }
+
+// SetVersionSink wires a callback invoked with the new config hash after each
+// successful swap (e.g. to update the active config-version gauge/log field).
+// Call before Start.
+func (w *ConfigWatcher) SetVersionSink(fn func(hash string)) { w.versionSink = fn }
 
 // Start begins watching the config file. It returns an error if the fsnotify
 // watcher cannot be initialised or if adding the config path fails. The watcher
@@ -210,6 +228,12 @@ func (w *ConfigWatcher) reload() {
 	w.lastHash.Store(&newHash)
 	w.reloadSuccessTotal.Add(1)
 	w.emitAudit("ok", oldHash, newHash, fmt.Sprintf("%d method(s)", len(newMethods)), "")
+	if w.reloadSink != nil {
+		w.reloadSink(true)
+	}
+	if w.versionSink != nil {
+		w.versionSink(newHash)
+	}
 	w.log.Info("reload: config applied", "methods", len(newMethods), "hash", newHash)
 }
 
@@ -218,6 +242,9 @@ func (w *ConfigWatcher) reload() {
 func (w *ConfigWatcher) fail(oldHash, newHash, errMsg string) {
 	w.reloadErrorTotal.Add(1)
 	w.emitAudit("error", oldHash, newHash, "", errMsg)
+	if w.reloadSink != nil {
+		w.reloadSink(false)
+	}
 	w.log.Error("reload: keeping last-known-good", "old_hash", oldHash, "new_hash", newHash, "err", errMsg)
 }
 

@@ -32,7 +32,15 @@ type AdminServer struct {
 	ks    KillSwitch
 	log   *slog.Logger
 	grpcs *grpc.Server
+	// onChange, if non-nil, is called with the full disabled set after each
+	// Disable/Enable so the caller can reconcile the method_disabled gauge.
+	onChange func(disabled []string)
 }
+
+// SetOnChange installs a callback invoked with the disabled set after every
+// Disable/Enable. main.go uses it to keep the method_disabled metric in sync.
+// Call before serving.
+func (a *AdminServer) SetOnChange(fn func(disabled []string)) { a.onChange = fn }
 
 // _ confirms AdminServer implements the generated server interface.
 var _ pb.RoutingServiceAdminServer = (*AdminServer)(nil)
@@ -120,6 +128,7 @@ func (a *AdminServer) DisableMethod(_ context.Context, req *pb.DisableMethodRequ
 		msg = "unknown method type"
 	}
 	a.log.Info("admin: DisableMethod", "type", t, "result", msg, "disabled", disabled)
+	a.notify(disabled)
 	return &pb.DisableMethodResponse{Ok: true, Message: msg, Disabled: disabled}, nil
 }
 
@@ -136,7 +145,15 @@ func (a *AdminServer) EnableMethod(_ context.Context, req *pb.EnableMethodReques
 		msg = "not disabled"
 	}
 	a.log.Info("admin: EnableMethod", "type", t, "result", msg, "disabled", disabled)
+	a.notify(disabled)
 	return &pb.EnableMethodResponse{Ok: true, Message: msg, Disabled: disabled}, nil
+}
+
+// notify invokes the onChange hook (if set) with the current disabled set.
+func (a *AdminServer) notify(disabled []string) {
+	if a.onChange != nil {
+		a.onChange(disabled)
+	}
 }
 
 // ListDisabled implements pb.RoutingServiceAdminServer.

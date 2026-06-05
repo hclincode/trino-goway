@@ -62,6 +62,49 @@ func (p *Pipeline) Evaluate(ctx context.Context, in *RouteInput) string {
 	return p.defaultGroup
 }
 
+// EvalResult is the observable outcome of a pipeline evaluation, carrying the
+// chosen group plus the metadata RS-9 needs for metrics labels and decision
+// logs: which method decided (empty on fallback) and whether any method errored.
+type EvalResult struct {
+	// RoutingGroup is the chosen group (always non-empty: defaultGroup on fallback).
+	RoutingGroup string
+	// MethodType is the deciding method's Type(), or "" when no method decided.
+	MethodType string
+	// Decided is true when a method made a definitive call (vs. fallback).
+	Decided bool
+	// HadError is true when at least one method's Evaluate errored and was skipped.
+	HadError bool
+}
+
+// EvaluateResult runs the pipeline and returns the chosen group together with
+// the deciding method type and outcome flags. This is the observability-aware
+// entry point used by server.Route (RS-9); Evaluate remains for callers that
+// only need the group.
+func (p *Pipeline) EvaluateResult(ctx context.Context, in *RouteInput) EvalResult {
+	ms := p.load()
+	hadErr := false
+	for _, m := range ms {
+		if isDisabled(p, m) {
+			continue
+		}
+		d, err := safeEvaluate(ctx, m, in, p.log)
+		if err != nil {
+			hadErr = true
+			p.log.Warn("engine: pipeline: method error, skipping",
+				"type", m.Type(), "err", err)
+			continue
+		}
+		if d.Decided {
+			group := d.RoutingGroup
+			if group == "" {
+				group = p.defaultGroup
+			}
+			return EvalResult{RoutingGroup: group, MethodType: m.Type(), Decided: true, HadError: hadErr}
+		}
+	}
+	return EvalResult{RoutingGroup: p.defaultGroup, Decided: false, HadError: hadErr}
+}
+
 // EvaluateFull runs the pipeline and returns the full Decision (including
 // ExternalHeaders and Errors). Used by server.Route when those fields matter.
 // For RS-2/RS-3 the server uses the simpler Evaluate; this is available for

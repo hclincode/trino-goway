@@ -5,19 +5,23 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/hclincode/trino-goway-routing-service/internal/config"
 	"github.com/hclincode/trino-goway-routing-service/internal/engine"
 	exprovider "github.com/hclincode/trino-goway-routing-service/internal/engine/providers/expr"
 	scriptprovider "github.com/hclincode/trino-goway-routing-service/internal/engine/providers/script"
+	"github.com/hclincode/trino-goway-routing-service/internal/metrics"
 	"github.com/hclincode/trino-goway-routing-service/internal/reload"
 	"github.com/hclincode/trino-goway-routing-service/internal/server"
+	"github.com/hclincode/trino-goway-routing-service/internal/tracing"
 )
 
 func main() {
@@ -67,17 +71,56 @@ func main() {
 
 	pipeline := engine.NewPipeline(methods, cfg.DefaultRoutingGroup, log)
 	eval := engine.NewPipelineEvaluator(pipeline)
-	srv := server.New(cfg, eval, log)
-
-	// Transition health to SERVING now that the pipeline is ready.
-	srv.SetReady(pipeline.Ready())
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
+	// RS-9: observability. Own Prometheus registry (no global) + OTel tracing
+	// (optional; disabled when cfg.TracingEndpoint is empty).
+	m := metrics.New()
+	tp, prop, tpShutdown, err := tracing.Init(ctx, tracing.Config{
+		Endpoint: cfg.TracingEndpoint,
+		Insecure: true,
+	})
+	if err != nil {
+		log.Error("routing-service: tracing init failed", "err", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = tpShutdown(shutCtx)
+	}()
+
+	srv := server.New(cfg, eval, log,
+		server.WithMetrics(m),
+		server.WithTracing(tp, prop),
+	)
+
+	// Seed the active config version (for decision logs + the config_version gauge).
+	srv.SetConfigVersion(configHash(*configPath))
+
+	// Transition health to SERVING now that the pipeline is ready.
+	srv.SetReady(pipeline.Ready())
+
+	// Serve /metrics on its own port (cfg.MetricsAddr), separate from the
+	// data-plane and admin listeners.
+	metricsSrv := metrics.NewServer(m)
+	metricsErr := make(chan error, 1)
+	go func() { metricsErr <- metricsSrv.Start(ctx, cfg.MetricsAddr) }()
+
 	// RS-6: hot-reload. Watch the config file and validate-before-activate on
 	// every change; invalid configs keep the last-known-good pipeline live.
+	// Wire reload outcomes + the active config version into metrics (RS-9).
 	watcher := reload.New(*configPath, pipeline, reg, log)
+	watcher.SetReloadSink(func(ok bool) {
+		if ok {
+			m.RecordReload(metrics.ReloadOK)
+		} else {
+			m.RecordReload(metrics.ReloadError)
+		}
+	})
+	watcher.SetVersionSink(srv.SetConfigVersion)
 	if err := watcher.Start(ctx); err != nil {
 		log.Error("routing-service: config watcher failed to start", "err", err)
 		os.Exit(1)
@@ -89,6 +132,12 @@ func main() {
 	// operators. It drives the pipeline's atomic Disable/Enable; changes take
 	// effect on the next Route call without a restart.
 	admin := server.NewAdmin(pipeline, log)
+	// Keep the method_disabled gauge in sync with kill-switch state.
+	allMethodTypes := make([]string, 0, len(cfg.Methods))
+	for _, mc := range cfg.Methods {
+		allMethodTypes = append(allMethodTypes, mc.Type)
+	}
+	admin.SetOnChange(func(disabled []string) { m.SyncDisabled(allMethodTypes, disabled) })
 	adminErr := make(chan error, 1)
 	go func() { adminErr <- admin.Start(ctx, cfg.AdminAddr) }()
 	defer admin.Stop()
@@ -101,7 +150,23 @@ func main() {
 		log.Error("routing-service: admin server error", "err", err)
 		os.Exit(1)
 	}
+	if err := <-metricsErr; err != nil {
+		log.Error("routing-service: metrics server error", "err", err)
+		os.Exit(1)
+	}
 	log.Info("routing-service: stopped")
+}
+
+// configHash returns the first 8 hex chars of the SHA-256 of the config file,
+// or "unknown" if it cannot be read. Matches the reload watcher's hashing so
+// the startup version and reload versions are comparable.
+func configHash(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "unknown"
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum[:4])
 }
 
 func parseLogLevel(s string) slog.Level {

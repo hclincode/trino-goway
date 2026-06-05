@@ -31,6 +31,13 @@ func (e *PipelineEvaluator) Evaluate(ctx context.Context, req *pb.RouteRequest) 
 	return e.p.Evaluate(ctx, in)
 }
 
+// EvaluateResult translates the proto request and returns the observability-rich
+// result (group + deciding method type + outcome flags) for RS-9 metrics/logs.
+func (e *PipelineEvaluator) EvaluateResult(ctx context.Context, req *pb.RouteRequest) EvalResult {
+	in := FromProto(req)
+	return e.p.EvaluateResult(ctx, in)
+}
+
 // Ready delegates to the pipeline's Ready method.
 func (e *PipelineEvaluator) Ready() bool {
 	return e.p.Ready()

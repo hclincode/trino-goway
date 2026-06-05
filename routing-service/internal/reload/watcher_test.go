@@ -390,3 +390,48 @@ func TestWatcher_AuditEventsOnReload(t *testing.T) {
 		t.Errorf("error audit old_hash = %q, want last-good hash %q", oldHash, okHash)
 	}
 }
+
+// TestWatcher_ReloadSink_FiresOkAndError verifies the RS-9 metrics/version sinks
+// fire on each reload outcome (true on success, false on failure) and that the
+// version sink receives the new hash on success.
+func TestWatcher_ReloadSink_FiresOkAndError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, path, configForGroup("group-a"))
+
+	reg := newRegistry()
+	p := buildPipeline(t, reg, path)
+	w := reload.New(path, p, reg, discardLogger())
+
+	var oks, errs atomic.Int64
+	var versions atomic.Int64
+	w.SetReloadSink(func(ok bool) {
+		if ok {
+			oks.Add(1)
+		} else {
+			errs.Add(1)
+		}
+	})
+	w.SetVersionSink(func(string) { versions.Add(1) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := w.Start(ctx); err != nil {
+		cancel()
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { w.Stop(); cancel() })
+
+	// Valid reload → ok sink + version sink.
+	writeFile(t, path, configForGroup("group-b"))
+	waitFor(t, 2*time.Second, func() bool { return oks.Load() == 1 }, "ok sink to fire once")
+	if versions.Load() != 1 {
+		t.Errorf("version sink fired %d times, want 1", versions.Load())
+	}
+
+	// Invalid reload → error sink, no extra version sink.
+	writeFile(t, path, invalidConfig())
+	waitFor(t, 2*time.Second, func() bool { return errs.Load() == 1 }, "error sink to fire once")
+	if versions.Load() != 1 {
+		t.Errorf("version sink fired %d times after invalid reload, want still 1", versions.Load())
+	}
+}

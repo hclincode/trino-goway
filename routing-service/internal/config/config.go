@@ -54,6 +54,10 @@ type Config struct {
 	// from Addr so it can be firewalled to platform operators only (no auth in
 	// Phase 1).
 	AdminAddr string `yaml:"adminAddr"`
+	// TracingEndpoint is the OTLP/gRPC collector endpoint (e.g. "localhost:4317").
+	// Empty (the default) disables span export: spans are still created but never
+	// shipped, so the hot path is unconditional and tracing is opt-in.
+	TracingEndpoint string `yaml:"tracingEndpoint"`
 	// DefaultRoutingGroup is returned when all methods defer (return empty/"").
 	// Must be non-empty.
 	DefaultRoutingGroup string `yaml:"defaultRoutingGroup"`

@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/hclincode/trino-goway-routing-service/internal/config"
+	"github.com/hclincode/trino-goway-routing-service/internal/engine"
 	"github.com/hclincode/trino-goway-routing-service/internal/server"
 	pb "github.com/hclincode/trino-goway-routing-service/routerpb"
 )
@@ -336,12 +337,24 @@ func (e *slowEvaluator) Evaluate(ctx context.Context, _ *pb.RouteRequest) string
 	return ""
 }
 
+func (e *slowEvaluator) EvaluateResult(ctx context.Context, _ *pb.RouteRequest) engine.EvalResult {
+	select {
+	case <-time.After(e.delay):
+	case <-ctx.Done():
+	}
+	return engine.EvalResult{Decided: false}
+}
+
 func (e *slowEvaluator) Ready() bool { return false }
 
 // panicEvaluator panics on every Evaluate call.
 type panicEvaluator struct{}
 
 func (e *panicEvaluator) Evaluate(_ context.Context, _ *pb.RouteRequest) string {
+	panic("simulated provider panic")
+}
+
+func (e *panicEvaluator) EvaluateResult(_ context.Context, _ *pb.RouteRequest) engine.EvalResult {
 	panic("simulated provider panic")
 }
 func (e *panicEvaluator) Ready() bool { return false }

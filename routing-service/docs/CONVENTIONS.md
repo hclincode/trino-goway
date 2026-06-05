@@ -17,7 +17,7 @@ Separate `go.mod` under `routing-service/`; independent of the parent `trino-gow
 | `script` routing method | `go.starlark.net` | `thread.SetMaxSteps(10_000)` + deadline cancel; structural sandbox |
 | Config + hot-reload | `gopkg.in/yaml.v3` + `github.com/fsnotify/fsnotify` | Validate-before-activate; atomic swap |
 | Metrics | `github.com/prometheus/client_golang` | Own `*prometheus.Registry`; no global default; `/metrics` on separate port |
-| Tracing | `go.opentelemetry.io/otel` + OTLP exporter | `otelgrpc.UnaryServerInterceptor`; parent trace propagation |
+| Tracing | `go.opentelemetry.io/otel` (+ `sdk`, `exporters/otlp/otlptrace/otlptracegrpc`) + `contrib/.../otelgrpc` | `otelgrpc.NewServerHandler` (stats handler; the interceptor form is deprecated); W3C parent-trace propagation; provider passed explicitly (no `otel.SetTracerProvider`) |
 | Test leak detection | `go.uber.org/goleak` | `goleak.VerifyTestMain(m)` in every package with goroutines |
 
 No new direct dependencies may be added without explicit team-lead approval. Adding a dependency requires updating this file and the go.mod in the same commit.
