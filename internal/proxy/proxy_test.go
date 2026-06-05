@@ -50,26 +50,6 @@ func (f *fakeRouter) CallOrder() []string {
 	return out
 }
 
-// writeCaptureRecorder wraps httptest.ResponseRecorder and records Write calls.
-type writeCaptureRecorder struct {
-	*httptest.ResponseRecorder
-	writes [][]byte
-	mu     sync.Mutex
-}
-
-func newWriteCapture() *writeCaptureRecorder {
-	return &writeCaptureRecorder{ResponseRecorder: httptest.NewRecorder()}
-}
-
-func (r *writeCaptureRecorder) Write(b []byte) (int, error) {
-	r.mu.Lock()
-	cp := make([]byte, len(b))
-	copy(cp, b)
-	r.writes = append(r.writes, cp)
-	r.mu.Unlock()
-	return r.ResponseRecorder.Write(b)
-}
-
 // discardLogger returns a slog.Logger that discards all output.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))

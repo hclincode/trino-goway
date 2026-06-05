@@ -21,6 +21,18 @@ type Backend interface {
 	GetURL() string
 }
 
+// StatusObserver is notified of the full backend health snapshot after every
+// probe cycle and whenever the backend set changes. Defined here (consumer owns
+// the interface) per conventions; nil-safe — when the monitor's observer is nil
+// every notification is skipped.
+//
+// statuses is keyed by backend URL; names maps backend URL → backend name so the
+// observer can label per-backend series and prune series for backends no longer
+// present.
+type StatusObserver interface {
+	ObserveStatuses(statuses map[string]TrinoStatus, names map[string]string)
+}
+
 // SimpleBackend is a value type satisfying Backend, used by tests and the composition root.
 type SimpleBackend struct {
 	Name string
@@ -52,6 +64,9 @@ type Monitor struct {
 	// Set via SetOnFirstTick before Start.
 	onFirstTick   func()
 	firstTickOnce sync.Once
+
+	// observer is notified of status snapshots; nil-safe. Set via SetObserver before Start.
+	observer StatusObserver
 }
 
 // New creates a new Monitor with the given config, HTTP client, and logger.
@@ -75,6 +90,40 @@ func (m *Monitor) SetOnFirstTick(fn func()) {
 	m.onFirstTick = fn
 }
 
+// SetObserver registers a StatusObserver notified of status snapshots after each
+// probe cycle and whenever the backend set changes. Must be called before Start.
+func (m *Monitor) SetObserver(o StatusObserver) {
+	m.observer = o
+}
+
+// notifyObserver builds the current snapshot (URL → status, URL → name) and
+// notifies the observer. Backends in the set that have not been probed yet are
+// reported as StatusPending. Safe to call with a nil observer (no-op).
+func (m *Monitor) notifyObserver() {
+	if m.observer == nil {
+		return
+	}
+	m.mu.RLock()
+	names := make(map[string]string, len(m.backends))
+	for _, b := range m.backends {
+		names[b.GetURL()] = b.GetName()
+	}
+	m.mu.RUnlock()
+
+	statusPtr := m.status.Load()
+	statuses := make(map[string]TrinoStatus, len(names))
+	for url := range names {
+		if statusPtr != nil {
+			if s, ok := (*statusPtr)[url]; ok {
+				statuses[url] = s
+				continue
+			}
+		}
+		statuses[url] = StatusPending
+	}
+	m.observer.ObserveStatuses(statuses, names)
+}
+
 // SetBackends replaces the current backend list.
 // Called when backends are added or removed via the admin API.
 func (m *Monitor) SetBackends(backends []Backend) {
@@ -83,6 +132,9 @@ func (m *Monitor) SetBackends(backends []Backend) {
 	m.mu.Lock()
 	m.backends = cp
 	m.mu.Unlock()
+	// Refresh observer series so added/removed backends are reflected before the
+	// next probe cycle (newly-added backends report as StatusPending).
+	m.notifyObserver()
 }
 
 // Status returns the current health status for a backend URL.
@@ -109,6 +161,7 @@ func (m *Monitor) SetBackendStatus(url string, status TrinoStatus) {
 	}
 	next[url] = status
 	m.status.Store(&next)
+	m.notifyObserver()
 }
 
 // AllStatuses returns a snapshot of all backend statuses keyed by URL.
@@ -216,6 +269,8 @@ func (m *Monitor) probe(ctx context.Context) {
 	// Single atomic swap.
 	next := results
 	m.status.Store(&next)
+
+	m.notifyObserver()
 
 	m.log.Debug("monitor: probe complete", "backends", len(backends))
 }

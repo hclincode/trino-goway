@@ -13,13 +13,14 @@ import (
 // LDAPMiddleware authenticates requests via HTTP Basic credentials bound against an LDAP server.
 // On success it attaches a Principal with the user's memberOf attribute.
 type LDAPMiddleware struct {
-	cfg config.LDAPConfig
-	log *slog.Logger
+	cfg     config.LDAPConfig
+	log     *slog.Logger
+	metrics Metrics
 }
 
-// NewLDAP creates an LDAPMiddleware.
-func NewLDAP(cfg config.LDAPConfig, log *slog.Logger) *LDAPMiddleware {
-	return &LDAPMiddleware{cfg: cfg, log: log}
+// NewLDAP creates an LDAPMiddleware. metrics may be nil (no-op).
+func NewLDAP(cfg config.LDAPConfig, log *slog.Logger, metrics Metrics) *LDAPMiddleware {
+	return &LDAPMiddleware{cfg: cfg, log: log, metrics: orNoop(metrics)}
 }
 
 // Handler returns a chi-compatible middleware that validates HTTP Basic credentials against LDAP.
@@ -28,6 +29,7 @@ func (m *LDAPMiddleware) Handler() Middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			username, password, ok := r.BasicAuth()
 			if !ok || username == "" || password == "" {
+				m.metrics.AuthRequest(TypeLDAP, ResultDeny)
 				writeUnauthorized(w, "Basic auth required")
 				return
 			}
@@ -35,6 +37,7 @@ func (m *LDAPMiddleware) Handler() Middleware {
 			memberOf, err := m.authenticate(username, password)
 			if err != nil {
 				m.log.Debug("auth: ldap: authentication failed", "user", username, "err", err)
+				m.metrics.AuthRequest(TypeLDAP, ResultDeny)
 				writeUnauthorized(w, "invalid credentials")
 				return
 			}
@@ -43,6 +46,7 @@ func (m *LDAPMiddleware) Handler() Middleware {
 				Name:     username,
 				MemberOf: memberOf,
 			})
+			m.metrics.AuthRequest(TypeLDAP, ResultAllow)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

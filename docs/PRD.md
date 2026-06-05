@@ -149,7 +149,9 @@ Run the Go gateway in shadow-traffic mode alongside Java, logging its routing de
 | Streaming | Buffer only on POST `/v1/statement`; stream all other paths via `io.Copy` |
 | Redirect following | Disabled globally (`CheckRedirect: ErrUseLastResponse`) |
 | Logger | `log/slog` |
-| Metrics | `prometheus/client_golang` |
+| Metrics | `prometheus/client_golang` — **implemented (Phase 9):** OpenMetrics `/metrics` on the admin listener, own `*prometheus.Registry` (no global default), `trino_goway_*` namespace |
+
+> **Metrics timing note:** per-backend health series (`trino_goway_backend_status`, `trino_goway_backend_activation_status`) populate only after the backend-refresh loop (~15s, the same `backendRefreshInterval` that reloads the active backend set from the DB) pushes a newly-registered backend into the monitor. A freshly-added backend's series is therefore expected to be absent for up to one refresh cycle — this is normal, not a missing metric.
 
 ---
 

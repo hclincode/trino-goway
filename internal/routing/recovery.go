@@ -36,12 +36,13 @@ type recoveryChain struct {
 	history     HistoryLookup
 	backends    BackendLister
 	probeClient *http.Client
+	metrics     RouterMetrics
 	sf          singleFlightGroup
 }
 
 // singleFlightGroup wraps sync to coalesce concurrent misses for the same queryID.
 type singleFlightGroup struct {
-	mu      sync.Mutex
+	mu       sync.Mutex
 	inflight map[string]*call
 }
 
@@ -85,6 +86,7 @@ func (r *recoveryChain) recoverBackend(ctx context.Context, queryID string) stri
 		return r.history.LookupByQueryID(ctx, queryID)
 	})
 	if url != "" {
+		r.recordStep(RecoveryStepHistory)
 		return url
 	}
 
@@ -94,11 +96,21 @@ func (r *recoveryChain) recoverBackend(ctx context.Context, queryID string) stri
 		return ""
 	}
 	if url := r.headProbeFanOut(ctx, queryID, backends); url != "" {
+		r.recordStep(RecoveryStepProbe)
 		return url
 	}
 
 	// Step 3: first-active default
+	r.recordStep(RecoveryStepDefault)
 	return backends[0].URL
+}
+
+// recordStep records a recovery-chain step, tolerating a nil metrics recorder
+// (the recovery chain may be constructed directly in tests).
+func (r *recoveryChain) recordStep(step string) {
+	if r.metrics != nil {
+		r.metrics.RecoveryStep(step)
+	}
 }
 
 // headProbeFanOut sends HEAD /v1/query/<queryID> to all backends concurrently and
