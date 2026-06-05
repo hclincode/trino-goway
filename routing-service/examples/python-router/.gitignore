@@ -1,0 +1,8 @@
+# Generated gRPC stubs (regenerate with grpc_tools.protoc — see README).
+router_pb2.py
+router_pb2_grpc.py
+*_pb2.pyi
+
+# Python venv / caches.
+.venv/
+__pycache__/

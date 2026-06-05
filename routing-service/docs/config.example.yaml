@@ -1,0 +1,60 @@
+# routing-service configuration — annotated example.
+#
+# Load with:  ./routing-service --config config.yaml
+# Validate without serving:  ./bin/routing-service-validate --config config.yaml
+
+# gRPC data-plane listen address (the gateway's routing.external.grpcAddr).
+# Default: ":9001".
+addr: ":9001"
+
+# Prometheus /metrics HTTP listen address (separate port). Default: ":9091".
+metricsAddr: ":9091"
+
+# RoutingServiceAdmin gRPC listen address — the runtime kill-switch
+# (DisableMethod / EnableMethod / ListDisabled). Served on a SEPARATE listener
+# so it can be firewalled to platform operators only (no auth in Phase 1).
+# Default: ":9092".
+adminAddr: ":9092"
+
+# OTLP/gRPC trace collector endpoint. Empty (the default) disables span export:
+# spans are still created but dropped, so tracing is opt-in with zero hot-path
+# cost. Example: "localhost:4317".
+tracingEndpoint: ""
+
+# Returned when every method defers (returns "" / None). Must be non-empty.
+# This is the service-level default; the gateway also has its own
+# routing.defaultGroup fallback for when the service errors or times out.
+defaultRoutingGroup: "default"
+
+# Ordered list of routing methods. The pipeline evaluates them top-to-bottom;
+# the FIRST method that returns a non-empty group wins. A method that defers
+# ("" for expr, None for script) or errors is skipped, and evaluation continues
+# to the next method. If none decide, defaultRoutingGroup is used.
+#
+# Each method sets exactly one of `program:` (inline source) or `file:` (path).
+methods:
+  # --- expr method: a single expression returning the group name -------------
+  - type: expr
+    program: |
+      request.source == "airflow" ? "etl"
+        : request.source == "superset" ? (hashPct(request.user) < 5 ? "interactive-canary" : "interactive")
+        : "tier=premium" in request.client_tags ? "premium"
+        : ""
+
+  # --- script method: a Starlark route(req) function -------------------------
+  # Inline so this file validates standalone:
+  #   routing-service-validate --config docs/config.example.yaml  → exit 0
+  # To load from a file instead, replace the `program:` block with:
+  #   file: "routes.star"
+  - type: script
+    program: |
+      def route(req):
+          if req.source == "airflow":
+              return "etl"
+          if req.source == "superset":
+              return "interactive-canary" if hashPct(req.user) < 5 else "interactive"
+          if "tier=premium" in req.client_tags:
+              return "premium"
+          if req.user.endswith("@analytics.acme.com"):
+              return "etl-" + req.user.split("@")[1].split(".")[0]
+          return None
