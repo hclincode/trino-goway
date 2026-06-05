@@ -46,6 +46,9 @@ const (
 //go:embed testdata/java-gateway-config.yaml.tmpl
 var javaGatewayConfigTmpl string
 
+//go:embed testdata/trino-config.properties
+var trinoConfigProperties []byte
+
 // Containers is the handle returned by BootstrapContainers. The URLs are
 // loopback-resolvable from the host (testcontainers maps the gateway port).
 //
@@ -105,6 +108,15 @@ func BootstrapContainers(ctx context.Context, t testing.TB) Containers {
 			ExposedPorts: []string{"8080/tcp"},
 			Networks:     []string{net.Name},
 			NetworkAliases: map[string][]string{net.Name: {"trino"}},
+			// Replace the image's default config.properties with one that adds
+			// http-server.process-forwarded=true. Both gateways inject
+			// X-Forwarded-* headers, which Trino rejects with HTTP 406 unless
+			// this flag is set (see testdata/trino-config.properties).
+			Files: []testcontainers.ContainerFile{{
+				Reader:            bytes.NewReader(trinoConfigProperties),
+				ContainerFilePath: "/etc/trino/config.properties",
+				FileMode:          0o644,
+			}},
 			WaitingFor: wait.ForHTTP("/v1/info").
 				WithPort("8080/tcp").
 				WithStartupTimeout(120 * time.Second),
@@ -137,7 +149,65 @@ func BootstrapContainers(ctx context.Context, t testing.TB) Containers {
 
 	registerBackend(ctx, t, javaURL, "trino-shared", "http://trino:8080")
 
+	// Readiness gate: the Java gateway's INFO_API cluster monitor runs on an
+	// interval and does not mark the freshly-seeded backend healthy synchronously
+	// with registerBackend. Until it does, the gateway 500s (empty body) on every
+	// /v1/* request because routing finds no healthy cluster. Scenarios that fire
+	// before the first healthy tick therefore diff Java=500 against Go=200. Poll a
+	// real proxied request until the gateway routes it successfully, so the live
+	// fleet is actually serving before any scenario runs.
+	waitGatewayRoutable(ctx, t, javaURL)
+
 	return Containers{JavaURL: javaURL, TrinoURL: trinoURL}
+}
+
+// waitGatewayRoutable polls POST /v1/statement (SELECT 1) against the gateway
+// until it returns a 2xx, proving the seeded backend has been marked healthy by
+// the cluster monitor and the gateway can route. Fails the test if the gateway
+// is still not routable within the deadline.
+//
+// SELECT 1 is a harmless probe: it mints a throwaway Trino query that completes
+// immediately; it does not affect any scenario's own request sequence.
+func waitGatewayRoutable(ctx context.Context, t testing.TB, gatewayURL string) {
+	t.Helper()
+
+	const (
+		deadline = 90 * time.Second
+		interval = 1 * time.Second
+	)
+	client := &http.Client{Timeout: 10 * time.Second}
+	end := time.Now().Add(deadline)
+
+	var lastStatus int
+	var lastErr error
+	for time.Now().Before(end) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+			gatewayURL+"/v1/statement", bytes.NewReader([]byte("SELECT 1")))
+		if err != nil {
+			t.Fatalf("diffharness: build readiness request: %v", err)
+		}
+		req.Header.Set("Content-Type", "text/plain")
+		req.Header.Set("X-Trino-User", "diff-harness-readiness")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+		} else {
+			lastStatus = resp.StatusCode
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				return
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("diffharness: gateway readiness cancelled: %v", ctx.Err())
+		case <-time.After(interval):
+		}
+	}
+	t.Fatalf("diffharness: gateway not routable within %s (last status=%d, last err=%v)",
+		deadline, lastStatus, lastErr)
 }
 
 func startContainer(ctx context.Context, t testing.TB, req testcontainers.GenericContainerRequest) testcontainers.Container {

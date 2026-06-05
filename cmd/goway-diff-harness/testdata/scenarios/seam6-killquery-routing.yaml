@@ -37,14 +37,14 @@ steps:
     body: "KILL QUERY '20240101_000000_99999_bogus'"
 diff:
   ignoreHeaders:
-    - Date
-    - Content-Length
-    - Server
-    - Set-Cookie
+    - Date  # [JUSTIFIED] per-request wall clock; never equal across two live calls
+    - Content-Length  # [JUSTIFIED] drifts after host:port rewrite; body itself is still fully diffed
+    - Server  # [JUSTIFIED] Jetty vs net/http; not part of any gateway API contract
+    - Set-Cookie  # [JUSTIFIED] Java may emit JSESSIONID/TG.* per session config; cookie wire-compat asserted positively in seam7
   ignoreBodyFields:
-    - id
-    - infoUri
-    - nextUri
-    - stats.elapsedTimeMillis
-    - stats.queuedTimeMillis
+    - id  # [JUSTIFIED] Trino mints a fresh queryId per submission; cannot match across two runs
+    - infoUri  # [JUSTIFIED] embeds the per-run queryId
+    - nextUri  # [JUSTIFIED] embeds the per-run queryId; shape/presence still asserted
+    - stats.elapsedTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.queuedTimeMillis  # [JUSTIFIED] timing-dependent execution stat
   rewriteHostPort: true

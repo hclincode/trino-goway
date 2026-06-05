@@ -38,21 +38,21 @@ steps:
     body: "SELECT * FROM definitely_no_such_table_diff_harness"
 diff:
   ignoreHeaders:
-    - Date
-    - Content-Length
-    - Server
-    - Set-Cookie
+    - Date  # [JUSTIFIED] per-request wall clock; never equal across two live calls
+    - Content-Length  # [JUSTIFIED] drifts after host:port rewrite; body itself is still fully diffed
+    - Server  # [JUSTIFIED] Jetty vs net/http; not part of any gateway API contract
+    - Set-Cookie  # [JUSTIFIED] Java may emit JSESSIONID/TG.* per session config; cookie wire-compat asserted positively in seam7
   ignoreBodyFields:
-    - id
-    - nextUri
-    - infoUri
-    - partialCancelUri
-    - error.errorLocation
-    - error.failureInfo
-    - error.stack
-    - stats.elapsedTimeMillis
-    - stats.queuedTimeMillis
-    - stats.cpuTimeMillis
-    - stats.wallTimeMillis
-    - warnings
+    - id  # [JUSTIFIED] Trino mints a fresh queryId per submission; cannot match across two runs
+    - nextUri  # [JUSTIFIED] embeds the per-run queryId; shape/presence still asserted
+    - infoUri  # [JUSTIFIED] embeds the per-run queryId
+    - partialCancelUri  # [JUSTIFIED] embeds the per-run queryId
+    - error.errorLocation  # [JUSTIFIED] JVM-internal column numbering; not wire contract (errorName/errorCode/errorType NOT ignored)
+    - error.failureInfo  # [JUSTIFIED] JVM-internal class names; not wire contract
+    - error.stack  # [JUSTIFIED] JVM-internal stack; not wire contract
+    - stats.elapsedTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.queuedTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.cpuTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.wallTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - warnings  # [JUSTIFIED] Trino's warning emitter is non-deterministic across runs
   rewriteHostPort: true

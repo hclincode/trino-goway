@@ -46,25 +46,29 @@ steps:
       maxIterations: 20
 diff:
   ignoreHeaders:
-    - Date
-    - Content-Length
-    - Server
-    - Set-Cookie
+    - Date  # [JUSTIFIED] per-request wall clock; never equal across two live calls
+    - Content-Length  # [JUSTIFIED] drifts after host:port rewrite; body itself is still fully diffed
+    - Server  # [JUSTIFIED] Jetty vs net/http; not part of any gateway API contract
+    - Set-Cookie  # [JUSTIFIED] Java may emit JSESSIONID/TG.* per session config; cookie wire-compat asserted positively in seam7
   ignoreBodyFields:
-    - id
-    - nextUri
-    - infoUri
-    - partialCancelUri
-    - stats.elapsedTimeMillis
-    - stats.queuedTimeMillis
-    - stats.cpuTimeMillis
-    - stats.wallTimeMillis
-    - stats.processedRows
-    - stats.processedBytes
-    - stats.peakMemoryBytes
-    - stats.physicalInputBytes
-    - stats.state
-    - data
-    - columns
-    - warnings
+    - id  # [JUSTIFIED] Trino mints a fresh queryId per submission; cannot match across two runs
+    - nextUri  # [JUSTIFIED] embeds the per-run queryId; shape/presence still asserted
+    - infoUri  # [JUSTIFIED] embeds the per-run queryId
+    - partialCancelUri  # [JUSTIFIED] embeds the per-run queryId
+    - stats.elapsedTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.queuedTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.cpuTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.wallTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.finishingTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.planningTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.analysisTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.rootStage  # [JUSTIFIED] execution per-stage detail tree; RECURSIVE (subStages nest StageStats each w/ own timers) so per-leaf timer enumeration is incomplete+brittle to query/version change; poll-timing-dependent (state/done/timers), same class as top-level stats.state — not a client contract (clients read top-level stats: state/progressPercentage/completedSplits/nodes)
+    - stats.processedRows  # [JUSTIFIED] execution-shape-dependent stat
+    - stats.processedBytes  # [JUSTIFIED] execution-shape-dependent stat
+    - stats.peakMemoryBytes  # [JUSTIFIED] execution-shape-dependent stat
+    - stats.physicalInputBytes  # [JUSTIFIED] execution-shape-dependent stat
+    - stats.state  # [JUSTIFIED] poll-timing dependent (QUEUED/RUNNING/FINISHED)
+    - data  # [JUSTIFIED] row may stream in an earlier poll; terminal payload presence is non-deterministic
+    - columns  # [JUSTIFIED] inner typeSignature tree drifts in non-load-bearing nested-type metadata across Trino versions; presence still asserted
+    - warnings  # [JUSTIFIED] Trino's warning emitter is non-deterministic across runs
   rewriteHostPort: true

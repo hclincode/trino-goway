@@ -29,15 +29,15 @@ steps:
       X-Trino-User: diff-harness
 diff:
   ignoreHeaders:
-    - Date
-    - Content-Length
-    - Server
+    - Date  # [JUSTIFIED] per-request wall clock; never equal across two live calls
+    - Content-Length  # [JUSTIFIED] drifts after host:port rewrite; body itself is still fully diffed
+    - Server  # [JUSTIFIED] Jetty vs net/http; not part of any gateway API contract
   ignoreBodyFields:
-    - nodeId
-    - coordinatorId
-    - starting
-    - nodeVersion
-    - environment
-    - uptime
-    - startTime
+    - nodeId  # [JUSTIFIED] per-Trino-instance identity
+    - coordinatorId  # [JUSTIFIED] per-Trino-instance identity
+    - starting  # [JUSTIFIED] per-Trino-instance startup state
+    - nodeVersion  # [JUSTIFIED] per-Trino-instance identity
+    - environment  # [JUSTIFIED] per-Trino-instance identity
+    - uptime  # [JUSTIFIED] per-Trino-instance identity
+    - startTime  # [JUSTIFIED] per-Trino-instance identity
   rewriteHostPort: true
