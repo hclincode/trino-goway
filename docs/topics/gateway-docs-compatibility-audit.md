@@ -80,14 +80,40 @@ Each item is a documented Java capability with no current Go equivalent and **no
 - **Knock-on:** `GET /api/public/backends/{name}/state` is documented to return *live query counts*; Go can only return health.
 - **PRD note:** PRD says external routing returns a group and the gateway "picks a cluster from that group" but never specifies a load-aware strategy. Operators relying on `QueryCountBasedRouter` lose that behavior.
 
-### 3.2 Prometheus `/metrics` endpoint — **GAP (high) + internal inconsistency**
+### 3.2 Prometheus `/metrics` endpoint — **RESOLVED (Phase 9, Tasks 56–64)**
 `operation.md`: Java exposes OpenMetrics at `/metrics` for Prometheus scraping.
-- **Go today:** **no `/metrics` route, and `prometheus/client_golang` is not a dependency** — despite `PRD.md` §Key Architecture Decisions locking "Metrics = `prometheus/client_golang`".
-- This is both a drop-in monitoring break (existing scrape configs fail) **and** a PRD-vs-implementation inconsistency that should be reconciled (implement it, or amend the PRD).
+- **Go today:** the gateway exposes OpenMetrics at `/metrics` on the **admin listener** (configurable via `metrics.{enabled,path}`; enabled by default). Metrics are served from a dedicated `*prometheus.Registry` (the global default registry is never used) via `promhttp.HandlerFor(..., {EnableOpenMetrics:true})`. `prometheus/client_golang` is a direct dependency. This reconciles the prior PRD-vs-implementation inconsistency — `PRD.md` §Key Architecture Decisions locked "Metrics = `prometheus/client_golang`", and that decision is now implemented and marked done.
+- Coverage: Go runtime (`go_*`) + process (`process_*`) collectors, HTTP server, proxy/forwarding, backend health/activation, routing/recovery-chain, and auth/persistence metrics, all under the `trino_goway_*` namespace. E2E-verified by `internal/e2e/metrics_e2e_test.go`.
 
-### 3.3 Web-UI OAuth2 login flow (`/sso`, `/oidc/callback`) — **GAP (high for UI users)**
+#### Java → Go metric-name mapping (dashboard migration)
+
+The Go gateway does not reproduce Java metric names verbatim — the Java names are JMX/Dropwizard-style and per-cluster, whereas the Go names follow Prometheus/OpenMetrics conventions (`trino_goway_*` namespace, dimensions carried as labels rather than baked into the metric name). Use this table to port existing dashboards/alerts:
+
+| Java (concept / JMX) | Go metric | Notes |
+|---|---|---|
+| JVM heap / GC / threads | `go_*` (e.g. `go_goroutines`, `go_gc_duration_seconds`, `go_memstats_*`) | Go runtime collector; the Go-native equivalent of the JVM metrics. |
+| Process CPU / RSS / FDs / uptime | `process_cpu_seconds_total`, `process_resident_memory_bytes`, `process_open_fds`, `process_start_time_seconds` | Process collector. |
+| `ClusterStats` / `{cluster}_TrinoStatus*` | `trino_goway_backend_status{backend,status}` | `status` ∈ `healthy\|unhealthy\|pending`; one series per backend per status (1 on the current status, 0 otherwise). |
+| `ClusterMetricsStats.getActivationStatus` | `trino_goway_backend_activation_status{backend}` | `1` active, `0` inactive, `-1` unknown. |
+| (aggregate cluster counts) | `trino_goway_backends{status}`, `trino_goway_backends_active` | Cluster-wide rollups. |
+| `ProxyHandlerStats` request counters | `trino_goway_proxy_requests_total{backend,routing_group,outcome}` | `outcome` ∈ `ok\|fallback\|error\|kill_query`. |
+| Proxy upstream latency | `trino_goway_proxy_upstream_duration_seconds{backend}` | Histogram. |
+| Oversized-response / fail-loud | `trino_goway_proxy_oversized_responses_total` | The 502 oversized-`/v1/statement` path. |
+| Sticky-routing cache writes | `trino_goway_proxy_statement_cache_writes_total` | Hard Invariant #3 (cache write before flush). |
+| External-router calls | `trino_goway_router_calls_total{transport,outcome}`, `trino_goway_router_call_duration_seconds{transport}` | `transport` ∈ `http\|grpc`; `outcome` ∈ `ok\|error\|timeout\|fallback`. |
+| Routing cache hit/miss | `trino_goway_routing_cache_events_total{event}` | `event` ∈ `hit\|miss`. |
+| Recovery-chain steps | `trino_goway_recovery_chain_steps_total{step}` | `step` ∈ `history\|probe\|default`. |
+| KILL QUERY routing | `trino_goway_kill_query_routes_total` | |
+| HTTP server (any listener) | `trino_goway_http_requests_total{listener,method,pattern,code}`, `trino_goway_http_request_duration_seconds{listener,method,pattern}`, `trino_goway_http_requests_in_flight{listener}` | `listener` ∈ `proxy\|admin`; `pattern` is the route template (bounded cardinality). |
+| Auth decisions | `trino_goway_auth_requests_total{type,result}` | `type` ∈ `oidc\|ldap\|noop`; `result` ∈ `allow\|deny`. |
+| JWKS refresh / key count | `trino_goway_jwks_refresh_total{result}`, `trino_goway_jwks_keys` | |
+| DB reachability / history inserts / backend reloads | `trino_goway_db_up`, `trino_goway_query_history_inserts_total{result}`, `trino_goway_backend_refresh_total{result}` | `result` ∈ `ok\|error`. |
+
+> **Migration note:** dashboards that selected a single cluster by metric name (e.g. `clusterA_TrinoStatus`) must switch to a label selector (e.g. `trino_goway_backend_status{backend="http://clusterA:8080",status="healthy"}`).
+
+### 3.3 Web-UI OAuth2 login flow (`/sso`, `/oidc/callback`) — **RESOLVED (Task 66)**
 `security.md`: the gateway UI authenticates operators via the OAuth2/OIDC handshake (`oidc/callback`).
-- **Go today:** `/sso` is a stub 302 and `/oidc/callback` returns 501 (per `admin-api-completeness-gap.java-analyst.md` rows 31–32). The proxy-side JWT validation works; the *interactive UI login* does not. Operators who log in to the web UI via OIDC cannot complete the flow.
+- **Go today:** the full authorization-code flow is implemented. `POST /sso` returns the IdP authorization URL in the `Result` envelope and sets a short-lived, HttpOnly, callback-scoped state cookie carrying CSRF `state` + `nonce`. `GET /oidc/callback` verifies the state, exchanges the code at the token endpoint (`auth.OIDCWebLogin`, endpoints resolved via OIDC discovery or explicit config), validates the id_token signature (JWKS) and nonce, sets the non-HttpOnly `token` cookie the SPA reads on mount (`useConsumeOidcCookie`), clears the state cookie, and redirects to `/trino-gateway`. Config: `auth.oidc.redirectUrl` (+ optional `authorizationEndpoint`/`tokenEndpoint`). When `redirectUrl` is unset, `/sso` reports "SSO not configured" and only Bearer-token API auth is available.
 
 ### 3.4 Form / preset-user authentication — **GAP (low–medium)**
 `security.md`: Java's default `authentication.defaultType` is `form`, backed by `presetUsers` (static user/password/privileges in config) with an RSA `selfSignKeyPair`.
@@ -97,12 +123,13 @@ Each item is a documented Java capability with no current Go equivalent and **no
 `security.md`: Java can terminate HTTPS itself (`http-server.https.*` keystore config).
 - **Go today:** plaintext listeners only; TLS is assumed at the load balancer / ingress. Fine for most deployments, but operators relying on gateway-terminated TLS must add an LB.
 
-### 3.6 `externalUrl` field on backends and query history — **GAP (medium, wire-shape)**
+### 3.6 `externalUrl` field on backends and query history — **RESOLVED**
 `gateway-api.md`: backend records carry an optional `externalUrl`; query history links use it.
-- **Go today:** the schema/struct omit `externalUrl` (`admin-api-completeness-gap` M5/M6): `ProxyBackend.externalUrl` is `omitempty` (Java always emits it, even `null`), and `QueryDetail.externalUrl` is always empty (no DB column). Breaks byte-level wire parity and any UI/tooling depending on the field.
+- **Backend side (M6) — RESOLVED (Task 68):** `gateway_backend` now has an `external_url` column (`migrations/00003_add_backend_external_url.sql`); `persistence.Backend.ExternalURL` persists it; `ProxyBackend.externalUrl` dropped `omitempty` and is always emitted. When unset it falls back to `proxyTo`, matching Java's `ProxyBackendConfiguration.getExternalUrl()`.
+- **Query-history side (M5) — RESOLVED (Task 67):** `query_history` now has an `external_url` column (`migrations/00004_add_query_history_external_url.sql`); it is stamped at capture time by resolving the routed backend's external URL (Java's `ProxyRequestHandler` sets `queryDetail.externalUrl` from the routing destination). `QueryDetail.externalUrl` is emitted on `/trino-gateway/api/queryHistory`, falling back to `backendUrl` for rows captured before the column existed.
 
-### 3.7 `/webapp/findQueryHistory` request field names — **GAP (medium, API-breaking)**
-`admin-api-completeness-gap` M-row: Go expects `{userName, backendUrl, queryId, source, page, pageSize}`; Java expects `{user, externalUrl, queryId, source, page, size}`. Three field-name disagreements break API clients written against Java.
+### 3.7 `/webapp/findQueryHistory` request field names — **RESOLVED (deviation documented, Task 71)**
+`admin-api-completeness-gap` M-row: Go expects `{userName, backendUrl, queryId, source, page, pageSize}`; Java expects `{user, externalUrl, queryId, source, page, size}`. This is a deliberate Go-side naming convention; the rebuilt web UI aligns its request to the Go names (`webapp/src/api/endpoints/history.ts`), and the server-side `userName`/`backendUrl`/`pageSize` filters are verified end to end (`TestAdmin_WebappFindQueryHistory_Filters`). Clients written against Java's field names must use the Go names. The companion verb item — `getRoutingRules` is POST and answers 204 for external routing (no 405) — is also resolved (Task 71).
 
 ### 3.8 `extraWhitelistPaths` — **GAP (low)**
 `design.md`/`installation.md`: operators configure extra request URIs (regexes) to forward to Trino.
@@ -119,9 +146,10 @@ Each item is a documented Java capability with no current Go equivalent and **no
 ### 3.11 `requestAnalyzerConfig.isClientsUseV2Format` (commercial V2 client protocol) — **GAP (low)**
 `routing-rules.md`: a toggle for commercial Trino V2-style request structure. Not supported in Go. Niche; relevant only to commercial distributions.
 
-### 3.12 `pagePermissions` + static `/trino-gateway/assets/*` — **GAP (low)**
+### 3.12 `pagePermissions` + static `/trino-gateway/assets/*` — **RESOLVED**
 `security.md`: per-role UI page gating (`dashboard`/`cluster`/`resource-group`/`selector`/`history`). And `admin-api-completeness-gap` notes `/trino-gateway/assets/{path}` is a 404 stub.
-- **Go today:** the compiled UI bundle is served, but per-page permission enforcement is not implemented, and the assets route is stubbed (blocks browser-driven E2E and full UI use).
+- **Static assets — RESOLVED (Task 65):** the production UI bundle is embedded via `//go:embed all:web/dist` (built with `make webapp`; Vite/pnpm, base path `/trino-gateway/`). `serveIndex`/`serveAssets`/`serveLogoSVG` serve it; `/trino-gateway/assets/*` returns content-hashed assets with immutable caching, and unmatched GETs under `/trino-gateway/*` fall back to `index.html` (SPA deep links) without shadowing API/probe routes. A code placeholder is served when no bundle is built.
+- **Page permissions — RESOLVED (Task 70):** `getUIConfiguration` now returns `disablePages` (config `ui.disablePages`, always an array). Per-role page permissions are configured via `auth.authorization.pagePermissions` (role→`"page1_page2"`); the resolved per-user union is returned in `/userinfo`'s `permissions` (Java `processPagePermissions` parity: a role with no entry grants all pages). The UI hides sidebar entries by role, `permissions`, and `disablePages`.
 
 ---
 
@@ -142,7 +170,7 @@ Each item is a documented Java capability with no current Go equivalent and **no
 These are findings, not scope changes. Per `docs/SCOPE.md` §5, promoting any item into scope needs a written rationale + team-lead sign-off.
 
 **Reconcile before any "drop-in replacement" GA claim (PRD Goal 1):**
-- **3.2 `/metrics`** — implement (PRD already locked the library) or amend the PRD. This is the cleanest fix and removes an internal contradiction.
+- **3.2 `/metrics`** — **DONE (Phase 9).** Implemented on the admin listener under the `trino_goway_*` namespace; the prior PRD-vs-implementation contradiction is reconciled. See §3.2 above for the Java→Go metric mapping.
 - **3.3 UI OAuth2 login** — `/sso` + `/oidc/callback` are stubs; the UI is unusable with OIDC until completed. Decide: implement, or document the UI as "API-only / reverse-proxy-auth" for v1.
 - **3.6 / 3.7 `externalUrl` + `findQueryHistory` field names** — wire-shape/API-breaking. Either match Java's shape or document the deviation explicitly (the completeness study already proposes both paths).
 

@@ -86,6 +86,16 @@ type Config struct {
 	Routing RoutingConfig `yaml:"routing"`
 	Auth    AuthConfig    `yaml:"auth"`
 	Cookie  CookieConfig  `yaml:"cookie"`
+	Metrics MetricsConfig `yaml:"metrics"`
+	UI      UIConfig      `yaml:"ui"`
+}
+
+// UIConfig holds web-UI feature flags surfaced by getUIConfiguration.
+type UIConfig struct {
+	// DisablePages lists page keys (e.g. "dashboard", "cluster", "history",
+	// "routingRules") globally hidden from the UI sidebar, mirroring Java's
+	// uiConfiguration.disablePages.
+	DisablePages []string `yaml:"disablePages"`
 }
 
 // ProxyConfig holds configuration for the proxy listener.
@@ -142,6 +152,12 @@ type AuthorizationConfig struct {
 	AdminRegex string `yaml:"admin"` // regex for ADMIN role
 	UserRegex  string `yaml:"user"`  // regex for USER role
 	APIRegex   string `yaml:"api"`   // regex for API role
+
+	// PagePermissions maps a role name (ADMIN/USER/API) to an underscore-separated
+	// list of UI page keys that role may see (e.g. "dashboard_cluster_history").
+	// Mirrors Java's pagePermissions. The resolved per-user union is returned in
+	// /userinfo's permissions; a role with no entry grants all pages.
+	PagePermissions map[string]string `yaml:"pagePermissions"`
 }
 
 // OIDCConfig holds OpenID Connect authentication configuration.
@@ -152,6 +168,16 @@ type OIDCConfig struct {
 	JWKSURL      string   `yaml:"jwksUrl"`
 	JWKSTTLSecs  int      `yaml:"jwksTtlSecs"` // default 300
 	Scopes       []string `yaml:"scopes"`
+
+	// RedirectURL is the absolute URL of the gateway's /oidc/callback endpoint,
+	// registered with the IdP as an allowed redirect URI. Required for the
+	// interactive Web-UI login (authorization-code) flow.
+	RedirectURL string `yaml:"redirectUrl"`
+
+	// AuthorizationEndpoint and TokenEndpoint override OIDC discovery. When empty,
+	// they are resolved from {issuerUrl}/.well-known/openid-configuration.
+	AuthorizationEndpoint string `yaml:"authorizationEndpoint"`
+	TokenEndpoint         string `yaml:"tokenEndpoint"`
 }
 
 // LDAPConfig holds LDAP authentication configuration.
@@ -161,6 +187,12 @@ type LDAPConfig struct {
 	BindPass string `yaml:"bindPassword"`
 	UserBase string `yaml:"userBase"`
 	UserAttr string `yaml:"userAttr"` // default "uid"
+}
+
+// MetricsConfig holds Prometheus metrics exposition configuration.
+type MetricsConfig struct {
+	Enabled bool   `yaml:"enabled"` // default true; when false the /metrics route is not registered (404)
+	Path    string `yaml:"path"`    // default "/metrics"
 }
 
 // CookieConfig holds session cookie configuration.
@@ -221,6 +253,10 @@ func defaultConfig() *Config {
 			TTL:        Duration{D: 10 * time.Minute},
 			WireCompat: true,
 		},
+		Metrics: MetricsConfig{
+			Enabled: true,
+			Path:    "/metrics",
+		},
 	}
 }
 
@@ -266,6 +302,12 @@ func applyDefaults(cfg *Config) {
 	if cfg.Auth.OIDC.JWKSTTLSecs == 0 {
 		cfg.Auth.OIDC.JWKSTTLSecs = 300
 	}
+	// Metrics.Enabled defaults to true via defaultConfig(); yaml.Unmarshal only
+	// overwrites it when the key is explicitly present, so the default is preserved
+	// when the user omits the field.
+	if cfg.Metrics.Path == "" {
+		cfg.Metrics.Path = "/metrics"
+	}
 }
 
 // Validate checks the configuration for logical errors.
@@ -287,6 +329,11 @@ func (c *Config) Validate() error {
 	if c.Auth.Type == "OIDC" {
 		if c.Auth.OIDC.JWKSURL == "" {
 			return fmt.Errorf("config: validate: auth.oidc.jwksUrl must be non-empty when auth.type is OIDC")
+		}
+	}
+	if c.Metrics.Enabled {
+		if !strings.HasPrefix(c.Metrics.Path, "/") {
+			return fmt.Errorf("config: validate: metrics.path must start with \"/\", got %q", c.Metrics.Path)
 		}
 	}
 	if c.Auth.Type == "LDAP" {

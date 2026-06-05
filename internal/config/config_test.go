@@ -144,6 +144,38 @@ routing:
 	assert.Equal(t, "EXTERNAL", cfg.Routing.Type)
 	assert.Equal(t, "uid", cfg.Auth.LDAP.UserAttr)
 	assert.Equal(t, 300, cfg.Auth.OIDC.JWKSTTLSecs)
+	assert.True(t, cfg.Metrics.Enabled)
+	assert.Equal(t, "/metrics", cfg.Metrics.Path)
+}
+
+func TestLoad_MetricsDisabled(t *testing.T) {
+	t.Parallel()
+	content := `
+routing:
+  type: EXTERNAL
+metrics:
+  enabled: false
+`
+	path := writeTempFile(t, content)
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	assert.False(t, cfg.Metrics.Enabled)
+	// Path default still applies even when disabled.
+	assert.Equal(t, "/metrics", cfg.Metrics.Path)
+}
+
+func TestValidate_MetricsPathMustStartWithSlash(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Proxy:   config.ProxyConfig{Port: 8080, ResponseSize: config.DataSize{Bytes: 1}},
+		Admin:   config.AdminConfig{Port: 8090},
+		Routing: config.RoutingConfig{Type: "EXTERNAL"},
+		Auth:    config.AuthConfig{Type: "NOOP"},
+		Metrics: config.MetricsConfig{Enabled: true, Path: "metrics"},
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "metrics.path must start with")
 }
 
 func TestValidate_AdminPortEqualsProxyPort(t *testing.T) {

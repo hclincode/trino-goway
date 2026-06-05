@@ -23,6 +23,7 @@ import (
 	"github.com/hclincode/trino-goway/internal/auth"
 	"github.com/hclincode/trino-goway/internal/config"
 	"github.com/hclincode/trino-goway/internal/lifecycle"
+	"github.com/hclincode/trino-goway/internal/metrics"
 	"github.com/hclincode/trino-goway/internal/monitor"
 	"github.com/hclincode/trino-goway/internal/persistence"
 	"github.com/hclincode/trino-goway/internal/proxy"
@@ -36,8 +37,24 @@ const shutdownTimeout = 30 * time.Second
 // into the monitor and router. Independent of monitor probe cadence.
 const backendRefreshInterval = 15 * time.Second
 
+// Result labels for backend-refresh metrics.
+const (
+	metricsResultOK    = "ok"
+	metricsResultError = "error"
+)
+
 //go:embed all:web/dist
 var webDistFS embed.FS
+
+// Compile-time assertion that the metrics implementations satisfy the consumer
+// interfaces they are injected into.
+var (
+	_ proxy.MetricsRecorder  = (*metrics.ProxyMetrics)(nil)
+	_ monitor.StatusObserver = (*metrics.BackendMetrics)(nil)
+	_ routing.RouterMetrics  = (*metrics.RouterMetrics)(nil)
+	_ auth.Metrics           = (*metrics.AuthMetrics)(nil)
+	_ persistence.Metrics    = (*metrics.PersistenceMetrics)(nil)
+)
 
 func main() {
 	configPath := flag.String("config", "config.yml", "path to gateway YAML config")
@@ -88,6 +105,36 @@ func run(configPath string, log *slog.Logger) error {
 		Timeout: cfg.Routing.External.Timeout.D,
 	}
 
+	// --- Metrics registry (explicit construction; no global registry). ---
+	metricsReg := metrics.New()
+	if err := metricsReg.RegisterRuntime(); err != nil {
+		return fmt.Errorf("trino-goway: register runtime metrics: %w", err)
+	}
+	httpMetrics, err := metrics.NewHTTPMetrics(metricsReg.Registerer())
+	if err != nil {
+		return fmt.Errorf("trino-goway: register http metrics: %w", err)
+	}
+	proxyMetrics, err := metrics.NewProxyMetrics(metricsReg.Registerer())
+	if err != nil {
+		return fmt.Errorf("trino-goway: register proxy metrics: %w", err)
+	}
+	backendMetrics, err := metrics.NewBackendMetrics(metricsReg.Registerer())
+	if err != nil {
+		return fmt.Errorf("trino-goway: register backend metrics: %w", err)
+	}
+	routerMetrics, err := metrics.NewRouterMetrics(metricsReg.Registerer())
+	if err != nil {
+		return fmt.Errorf("trino-goway: register router metrics: %w", err)
+	}
+	authMetrics, err := metrics.NewAuthMetrics(metricsReg.Registerer())
+	if err != nil {
+		return fmt.Errorf("trino-goway: register auth metrics: %w", err)
+	}
+	persistenceMetrics, err := metrics.NewPersistenceMetrics(metricsReg.Registerer())
+	if err != nil {
+		return fmt.Errorf("trino-goway: register persistence metrics: %w", err)
+	}
+
 	// --- Database + persistence. ---
 	var db *sqlx.DB
 	var backendDAO *persistence.BackendDAO
@@ -95,21 +142,24 @@ func run(configPath string, log *slog.Logger) error {
 	if cfg.DB.Driver != "" {
 		db, err = persistence.Open(rootCtx, cfg.DB)
 		if err != nil {
+			persistenceMetrics.SetDBUp(false)
 			return fmt.Errorf("trino-goway: open db: %w", err)
 		}
+		persistenceMetrics.SetDBUp(true)
 		defer func() {
 			if cerr := db.Close(); cerr != nil {
 				log.Warn("trino-goway: close db", "err", cerr)
 			}
 		}()
 		backendDAO = persistence.NewBackendDAO(db)
-		historyDAO = persistence.NewHistoryDAO(db)
+		historyDAO = persistence.NewHistoryDAO(db, persistenceMetrics)
 	} else {
 		return fmt.Errorf("trino-goway: db.driver must be configured")
 	}
 
 	// --- Monitor. ---
 	mon := monitor.New(cfg.Monitor, monitorClient, log.With("component", "monitor"))
+	mon.SetObserver(backendMetrics)
 
 	// --- Routing. ---
 	router, err := routing.New(routing.Config{
@@ -118,6 +168,7 @@ func run(configPath string, log *slog.Logger) error {
 		ProbeClient:    monitorClient,
 		History:        historyDAO,
 		Backends:       &activeBackendAdapter{dao: backendDAO},
+		Metrics:        routerMetrics,
 		Log:            log.With("component", "routing"),
 	})
 	if err != nil {
@@ -125,7 +176,7 @@ func run(configPath string, log *slog.Logger) error {
 	}
 
 	// --- Auth middleware. ---
-	authMW, authStop, err := buildAuthMiddleware(rootCtx, cfg.Auth, log.With("component", "auth"))
+	authMW, authStop, err := buildAuthMiddleware(rootCtx, cfg.Auth, authMetrics, log.With("component", "auth"))
 	if err != nil {
 		return fmt.Errorf("trino-goway: build auth: %w", err)
 	}
@@ -133,20 +184,36 @@ func run(configPath string, log *slog.Logger) error {
 		defer authStop()
 	}
 
+	// --- OIDC Web-UI login (authorization-code flow). ---
+	// Constructed only when OIDC auth is configured with a redirect URL; the
+	// gateway still boots (and the /sso handler reports "not configured") when it
+	// is absent.
+	var webLogin admin.OIDCWebLogin
+	if cfg.Auth.Type == "OIDC" && cfg.Auth.OIDC.RedirectURL != "" {
+		oidcClient := &http.Client{Timeout: 10 * time.Second}
+		wl, werr := auth.NewOIDCWebLogin(rootCtx, cfg.Auth.OIDC, oidcClient)
+		if werr != nil {
+			return fmt.Errorf("trino-goway: build oidc web login: %w", werr)
+		}
+		webLogin = wl
+	}
+
 	// --- Proxy. ---
 	var proxyHistory proxy.HistoryRecorder
 	if historyDAO != nil {
-		proxyHistory = &historyAdapter{dao: historyDAO}
+		proxyHistory = &historyAdapter{dao: historyDAO, backends: backendDAO}
 	}
 	proxyHandler := proxy.New(proxy.Config{
-		Proxy:   cfg.Proxy,
-		Cookie:  cfg.Cookie,
-		Auth:    cfg.Auth,
-		Client:  proxyClient,
-		Router:  router,
-		History: proxyHistory,
-		AuthMW:  authMW,
-		Log:     log.With("component", "proxy"),
+		Proxy:           cfg.Proxy,
+		Cookie:          cfg.Cookie,
+		Auth:            cfg.Auth,
+		Client:          proxyClient,
+		Router:          router,
+		History:         proxyHistory,
+		AuthMW:          authMW,
+		Metrics:         httpMetrics.Middleware("proxy"),
+		MetricsRecorder: proxyMetrics,
+		Log:             log.With("component", "proxy"),
 	})
 
 	// --- Admin. ---
@@ -154,18 +221,26 @@ func run(configPath string, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("trino-goway: web dist sub fs: %w", err)
 	}
-	_ = adminUIFS // reserved for future static handler wiring; admin currently serves a placeholder
 
 	startTime := time.Now()
 	adminHandler := admin.New(admin.Config{
-		Auth:      cfg.Auth,
-		Backends:  backendDAO,
-		History:   historyDAO,
-		Monitor:   mon,
-		StatusMut: mon,
-		AuthMW:    authMW,
-		Log:       log.With("component", "admin"),
-		StartTime: startTime,
+		Auth:         cfg.Auth,
+		Backends:     backendDAO,
+		History:      historyDAO,
+		Monitor:      mon,
+		StatusMut:    mon,
+		AuthMW:       authMW,
+		UIFS:         adminUIFS,
+		WebLogin:     webLogin,
+		DisablePages: cfg.UI.DisablePages,
+		Log:          log.With("component", "admin"),
+		StartTime:    startTime,
+		Metrics: admin.MetricsConfig{
+			Enabled: cfg.Metrics.Enabled,
+			Path:    cfg.Metrics.Path,
+			Handler: metricsReg.Handler(),
+		},
+		MetricsMW: httpMetrics.Middleware("admin"),
 	})
 
 	// --- HTTP servers. ---
@@ -189,7 +264,7 @@ func run(configPath string, log *slog.Logger) error {
 	}
 
 	// --- Start monitor + backend refresh. ---
-	if err := refreshBackends(rootCtx, backendDAO, mon); err != nil {
+	if err := refreshBackends(rootCtx, backendDAO, mon, persistenceMetrics); err != nil {
 		log.Warn("trino-goway: initial backend refresh failed", "err", err)
 	}
 	// Flip readyz only after the first probe cycle so we don't advertise
@@ -202,7 +277,7 @@ func run(configPath string, log *slog.Logger) error {
 	// goroutine exits when rootCtx is cancelled (signal received).
 	go func() {
 		defer close(refreshDone)
-		runBackendRefresh(rootCtx, backendDAO, mon, log)
+		runBackendRefresh(rootCtx, backendDAO, mon, persistenceMetrics, log)
 	}()
 
 	startErr := lc.Start(rootCtx)
@@ -224,19 +299,19 @@ func run(configPath string, log *slog.Logger) error {
 
 // buildAuthMiddleware returns the configured auth middleware plus an optional
 // stop function for background workers (e.g. OIDC JWKS refresher).
-func buildAuthMiddleware(ctx context.Context, cfg config.AuthConfig, log *slog.Logger) (auth.Middleware, func(), error) {
+func buildAuthMiddleware(ctx context.Context, cfg config.AuthConfig, am auth.Metrics, log *slog.Logger) (auth.Middleware, func(), error) {
 	switch cfg.Type {
 	case "OIDC":
-		mw, err := auth.NewOIDC(ctx, cfg.OIDC, log)
+		mw, err := auth.NewOIDC(ctx, cfg.OIDC, log, am)
 		if err != nil {
 			return nil, nil, err
 		}
 		return mw.Handler(), mw.Stop, nil
 	case "LDAP":
-		mw := auth.NewLDAP(cfg.LDAP, log)
+		mw := auth.NewLDAP(cfg.LDAP, log, am)
 		return mw.Handler(), nil, nil
 	case "NOOP", "":
-		return auth.Noop(), nil, nil
+		return auth.Noop(am), nil, nil
 	default:
 		return nil, nil, fmt.Errorf("auth: unknown type %q", cfg.Type)
 	}
@@ -244,7 +319,7 @@ func buildAuthMiddleware(ctx context.Context, cfg config.AuthConfig, log *slog.L
 
 // runBackendRefresh periodically reloads backends from the DB and pushes the
 // active set into the monitor so probes follow live configuration.
-func runBackendRefresh(ctx context.Context, dao *persistence.BackendDAO, mon *monitor.Monitor, log *slog.Logger) {
+func runBackendRefresh(ctx context.Context, dao *persistence.BackendDAO, mon *monitor.Monitor, pm *metrics.PersistenceMetrics, log *slog.Logger) {
 	ticker := time.NewTicker(backendRefreshInterval)
 	defer ticker.Stop()
 	for {
@@ -252,7 +327,7 @@ func runBackendRefresh(ctx context.Context, dao *persistence.BackendDAO, mon *mo
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := refreshBackends(ctx, dao, mon); err != nil {
+			if err := refreshBackends(ctx, dao, mon, pm); err != nil {
 				log.Warn("trino-goway: backend refresh", "err", err)
 			}
 		}
@@ -260,11 +335,16 @@ func runBackendRefresh(ctx context.Context, dao *persistence.BackendDAO, mon *mo
 }
 
 // refreshBackends loads active backends from the DB and updates the monitor.
-func refreshBackends(ctx context.Context, dao *persistence.BackendDAO, mon *monitor.Monitor) error {
+// It records the refresh outcome and database reachability on pm.
+func refreshBackends(ctx context.Context, dao *persistence.BackendDAO, mon *monitor.Monitor, pm *metrics.PersistenceMetrics) error {
 	backends, err := dao.ListActive(ctx)
 	if err != nil {
+		pm.BackendRefresh(metricsResultError)
+		pm.SetDBUp(false)
 		return err
 	}
+	pm.BackendRefresh(metricsResultOK)
+	pm.SetDBUp(true)
 	monBackends := make([]monitor.Backend, len(backends))
 	for i, b := range backends {
 		monBackends[i] = monitor.SimpleBackend{Name: b.Name, URL: b.URL}
@@ -279,16 +359,28 @@ type activeBackendAdapter struct {
 }
 
 // historyAdapter adapts *persistence.HistoryDAO to proxy.HistoryRecorder.
+// It stamps external_url at capture time by resolving the routed backend's
+// external URL (falling back to the backend URL), matching Java's
+// ProxyRequestHandler which sets queryDetail.externalUrl from the routing
+// destination before submitting it.
 type historyAdapter struct {
-	dao *persistence.HistoryDAO
+	dao      *persistence.HistoryDAO
+	backends *persistence.BackendDAO
 }
 
 func (h *historyAdapter) Insert(ctx context.Context, queryID, backendURL, userName, source string) error {
+	externalURL, err := h.backends.LookupExternalURL(ctx, backendURL)
+	if err != nil {
+		// A failed lookup must not drop the history record; fall back to the
+		// backend URL, which is the same value Java emits when externalUrl is unset.
+		externalURL = backendURL
+	}
 	return h.dao.Insert(ctx, persistence.QueryRecord{
-		QueryID:    queryID,
-		BackendURL: backendURL,
-		UserName:   userName,
-		Source:     source,
+		QueryID:     queryID,
+		BackendURL:  backendURL,
+		ExternalURL: externalURL,
+		UserName:    userName,
+		Source:      source,
 	})
 }
 

@@ -173,7 +173,8 @@ Critical path: **17 → 18 → 19 → 20 → 24**. Tasks 21, 22, 23, 25 off crit
   - [x] **Phase 1** — `internal/diffharness/` library (scenario, normalize, diff, runner) + `cmd/goway-diff-harness/` CLI with `live`/`replay`/`record`/`report` subcommands (replay/record/report stubbed for Phase 2). 83% unit coverage, end-to-end CLI smoke passing against two httptest fakes. Smoke scenario: `seam1-body-passthrough.yaml`.
   - [x] **Phase 2** — Java gateway container bootstrap (`internal/diffharness/bootstrap.go`, `trinodb/trino-gateway:19` + Postgres + shared Trino via `testcontainers-go/network`, embedded config template at `internal/diffharness/testdata/java-gateway-config.yaml.tmpl`). `record`/`replay`/`report` subcommands wired with `Golden` on-disk format under `cmd/goway-diff-harness/testdata/golden/`. `cmd/goway-diff-harness/live_test.go` under `//go:build diff` boots the fleet + in-process Go gateway and asserts all committed scenarios PASS. Library coverage 85.2%.
   - [x] **Phase 3 scenarios** — committed 8 new YAML scenarios under `cmd/goway-diff-harness/testdata/scenarios/`: seam2-redirect-not-followed, seam3-cache-write-before-flush, seam4-router-result-handling, seam5-async-timeout, seam6-killquery-routing, seam7-cookie-emission, seam8-upstream-error, statement-protocol-roundtrip. Every diff.ignore* entry carries a `[JUSTIFIED]` comment per the normalizer-minimal discipline; enforced by `internal/diffharness/scenarios_validation_test.go::TestCommittedScenarios_LoadAndJustified`. CLI smoke tests scoped to seam1 only (the smoke fake is intentionally minimal — Phase-3 scenarios are validated end-to-end by the `//go:build diff` `live_test.go` against the real fleet). `go test -race` clean on both packages.
-  - [ ] **Phase 3 remaining** — CI guidance for the `diff` build tag; qa-tech-lead normalizer sign-off; first nightly `live_test.go` execution to bake in any timing surprises and commit the resulting golden files.
+  - [x] **Phase 3 remaining — partial** — (1) CI guidance for the `diff`/`e2e` build tags added to README.md ("CI scheduling" subsection: per-PR vs nightly split, diff is nightly-only). (2) qa-tech-lead normalizer sign-off complete: `docs/studies/both/diff-normalizer-signoff.qa-tech-lead.md` (all 15 scenarios reviewed, SIGNED OFF; findings F1 per-entry-justification enforcement gap, F2 columns-subtree, F3 external-router not exercisable). (3) First live `live_test.go` run executed against a real Docker fleet — surfaced and FIXED 3 bootstrap bugs that had silently kept the live test from ever passing: B1 bogus `authentication.authenticationType` config, B2 hyphen in `node.environment`, B3 missing `http-server.process-forwarded=true` on Trino (added `internal/diffharness/testdata/trino-config.properties`). Note: `live_test.go` asserts live PASS directly and records **no** golden files — golden files are the separate `record`/`replay` flow, so "commit golden files" did not apply.
+  - [x] **Phase 3 remaining — live all-PASS (→ Task 55 / go-qa)** — DONE. Both harness-completeness blockers resolved: **L1** `bootstrap.go::waitGatewayRoutable` readiness gate (poll `POST /v1/statement` until 2xx so the `INFO_API` monitor has marked the seeded backend healthy before scenarios fire). **L2** `live_test.go::startGoGateway` now mounts the FULL gateway (admin + proxy muxed by path; in-memory `backendStore`/`historyStore`; `auth.Noop` + wide-open authz) — no more Go-side 404s. `query-history-scoping` is a documented unit-only exclusion (endpoint mismatch: Go `GET /trino-gateway/api/queryHistory` vs Java `POST /webapp/findQueryHistory`); `stats.rootStage` + execution timers ignored as per-run non-determinism. Live fleet green (two consecutive runs).
 
 ### Phase 6: Team Review
 
@@ -458,10 +459,10 @@ Extends the committed diff-harness scenario corpus to cover admin API, routing, 
   - [x] `recovery-chain-history.yaml` — query recorded in history; new request for same queryId after cache clear → history-lookup routes correctly
   - [x] `health-probe-unhealthy.yaml` — mark backend unhealthy; submit request; verify unhealthy backend excluded
   - [x] `query-history-scoping.yaml` — two users submit queries; each sees only own records via webapp `findQueryHistory`
-- [x] Every `diff.ignore*` entry in new scenarios carries a `[JUSTIFIED]` comment
+- [x] Every `diff.ignore*` entry in new scenarios carries an inline per-entry `# [JUSTIFIED] <reason>` comment (F1: `scenarios_validation_test.go` now enforces this per-entry, not file-level — `unjustifiedIgnoreEntries` names the exact missing field+file)
 - [x] All new scenarios pass `internal/diffharness/scenarios_validation_test.go::TestCommittedScenarios_LoadAndJustified`
-- [ ] All new scenarios pass in `cmd/goway-diff-harness/live_test.go` under `//go:build diff` (deferred: requires Docker fleet bootstrap; gated by Tasks 38/42-44 wiring)
-- [x] `go vet ./...` pass; `golangci-lint run ./...` not run in this task
+- [x] All in-target scenarios pass in `cmd/goway-diff-harness/live_test.go` under `//go:build diff` against a real Docker fleet (trino-gateway:19 + Trino 476 + Postgres 17). **L1**: `bootstrap.go::waitGatewayRoutable` readiness gate (poll `POST /v1/statement` until 2xx so the INFO_API monitor has marked the backend healthy). **L2**: `startGoGateway` mounts the FULL gateway (admin + proxy muxed by path) with in-memory `backendStore`/`historyStore` + `auth.Noop` + wide-open authz. `stats.rootStage` + top-level timing fields ignored as per-run execution non-determinism. `query-history-scoping` is a documented unit-only exclusion (`liveExcludedScenarios`): Go's `GET /trino-gateway/api/queryHistory` vs Java's `POST /webapp/findQueryHistory` is an endpoint mismatch, scoping covered in `internal/admin/admin_test.go` (F3-class, like `external-routing-headers`'s injection path). Two consecutive green fleet runs.
+- [x] `go vet ./...` + `go vet -tags diff ./...` pass; `golangci-lint run ./internal/diffharness/... ./cmd/goway-diff-harness/...` = 0 issues
 
 ---
 
@@ -570,35 +571,52 @@ Every task carries `go vet ./...` + `golangci-lint run ./...` and unit tests; en
 
 Go-side work the rebuilt web UI (`webapp/`, modern React) depends on. These realize already-in-scope features (Web UI, admin API, OIDC) — bug-fixes/completions, not new scope (no SCOPE §5 sign-off needed). The rebuilt frontend degrades gracefully without them (see `webapp/docs/PRD.md` §API reconciliation); each closes a gap in `docs/topics/gateway-docs-compatibility-audit.md`. Hand-off surfaced by the frontend analysis (`webapp/docs/studies/webapp-api-and-data-model.md`).
 
-### Task 65 — Serve the real UI bundle + SPA fallback
-- [ ] Replace the `cmd/trino-goway/web/dist` placeholder by embedding the `webapp` production build output (define the build→embed wiring; the frontend builds with base path `/trino-gateway/`)
-- [ ] Wire `adminUIFS` (currently `_ = adminUIFS`, `main.go:157`) into `serveIndex`/`serveAssets`; implement `serveAssets` (currently a 404 stub, `internal/admin/router.go:213`) to serve embedded static assets
-- [ ] SPA fallback: serve `index.html` for unknown GET sub-paths under the `/trino-gateway` base (browser-router deep links) — without shadowing real API routes
-- [ ] Tests; `go vet ./...` + `golangci-lint run ./...` pass
+### Task 65 — Serve the real UI bundle + SPA fallback ✅
+- [x] Replaced the `cmd/trino-goway/web/dist` placeholder by embedding the `webapp` production build output
+  - [x] build→embed wiring in `Makefile` (`make webapp` runs pnpm/Vite build at base path `/trino-gateway/`, copies `webapp/dist` → `cmd/trino-goway/web/dist`; `make build` depends on it). Built bundle gitignored; only `.gitkeep` tracked. README "Web UI bundle" section documents it.
+- [x] Wired `adminUIFS` into `admin.Config.UIFS`; `serveIndex`/`serveLogoSVG`/`serveAssets` serve from the embedded bundle (`http.ServeContent`, content-hashed assets cached `immutable`). Code placeholder fallback when no bundle is built (`go build` without `make webapp` still runs).
+- [x] SPA fallback: `r.Get("/trino-gateway/*", serveIndex)` serves `index.html` for unknown GET sub-paths (deep links) — chi resolves the API/asset/probe patterns first, so it does not shadow real routes (asserted by `TestAdmin_ServeUI_DoesNotShadowAPI`)
+- [x] Tests (`internal/admin/ui_test.go`): bundle serving, SPA deep links, no-shadow invariant, path-traversal guard, placeholder fallback; `go vet` + `golangci-lint` pass; `make webapp` build + embed verified end-to-end (25 MB binary embeds the real bundle)
 
-### Task 66 — Complete the Web-UI OAuth2 login flow (audit §3.3)
-- [ ] Implement `/sso` (initiate redirect) and `/oidc/callback` (currently 501, `authhandlers.go:72`) with the `token` cookie handoff the UI consumes on mount
-- [ ] Tests; vet + lint pass
+### Task 66 — Complete the Web-UI OAuth2 login flow (audit §3.3) ✅
+- [x] Implemented `/sso` (returns the IdP authorization URL in the `Result` envelope + sets HttpOnly, callback-scoped `state`/`nonce` cookie) and `/oidc/callback` (verifies state, exchanges code, validates id_token sig + nonce, sets the non-HttpOnly `token` cookie the UI reads on mount, redirects to `/trino-gateway`)
+  - [x] `internal/auth/weblogin.go` — `OIDCWebLogin`: OIDC discovery (or explicit `authorizationEndpoint`/`tokenEndpoint`), `AuthCodeURL`, `Exchange` (token request + id_token JWKS/nonce validation), `RandomToken`
+  - [x] config: `auth.oidc.redirectUrl` (+ optional explicit endpoints); wired in `main.go` (built only when OIDC + redirectUrl set); `admin.Config.WebLogin` (interface, satisfied by `*auth.OIDCWebLogin`)
+  - [x] testutil OIDC server gained discovery/authorize/token endpoints + `IssueTokenWithClaims`
+- [x] Tests; vet + lint pass — `internal/admin/oidc_test.go` (handler flow, state cookie, CSRF mismatch, exchange failure), `internal/auth/weblogin_test.go` (full discovery→authorize→token→validate flow, explicit endpoints, nonce-mismatch rejection, redirectUrl required)
 
-### Task 67 — Populate `externalUrl` in query history (audit §3.7 / M5)
-- [ ] Add `external_url` to the query-history schema (or resolve via backend join); set on capture; emit `QueryDetail.externalUrl` on the wire so QueryId deeplinks + RoutedTo render
-- [ ] Tests; vet + lint pass
+### Task 67 — Populate `externalUrl` in query history (audit §3.7 / M5) ✅
+- [x] Added `external_url` to the query-history schema; set on capture; emit `QueryDetail.externalUrl` on the wire so QueryId deeplinks + RoutedTo render
+  - [x] `migrations/00004_add_query_history_external_url.sql` — `external_url VARCHAR(2048) NOT NULL DEFAULT ''` (Postgres + MySQL)
+  - [x] `persistence.QueryRecord.ExternalURL` (`db:"external_url"`); `Insert`/`ListRecent`/`FindByFilter` carry the column
+  - [x] `persistence.BackendDAO.LookupExternalURL` resolves the routed backend's external URL (falls back to the backend URL); `historyAdapter` stamps it at capture time (Java `ProxyRequestHandler` parity)
+  - [x] `queryDetailFromRecord` emits `externalUrl`, falling back to `backendUrl` for rows captured before the column existed
+- [x] Tests; vet + lint pass (`TestAdmin_QueryHistoryExternalURL`, persistence history + backend Postgres suites)
 
-### Task 68 — Always emit backend `externalUrl` (audit M6)
-- [ ] Drop `,omitempty` on `ProxyBackend.externalUrl`; store/return `ExternalURL` on the backend record so the cluster table + history mapping resolve
-- [ ] Tests; vet + lint pass
+### Task 68 — Always emit backend `externalUrl` (audit M6) ✅
+- [x] Dropped `,omitempty` on `ProxyBackend.externalUrl`; store/return `ExternalURL` on the backend record so the cluster table + history mapping resolve
+  - [x] `migrations/00003_add_backend_external_url.sql` — `external_url VARCHAR(2048) NOT NULL DEFAULT ''` (Postgres + MySQL)
+  - [x] `persistence.Backend.ExternalURL` (`db:"external_url"`); `List`/`ListActive`/`Upsert` queries carry the column
+  - [x] `proxyBackendFromPersistence` emits `externalUrl`, falling back to `proxyTo` when unset (Java `getExternalUrl()` parity); `persistenceBackendFromProxy` stores the raw value
+- [x] Tests; vet + lint pass (`TestAdmin_BackendExternalURL`, persistence Upsert suite, `TestE2E_Admin_BackendWireShape`)
 
-### Task 69 — Populate `getDistribution.lineChart`
-- [ ] Fill the per-backend, per-minute query-count series (currently an empty map) from query history so the dashboard line chart renders
-- [ ] Tests; vet + lint pass
+### Task 69 — Populate `getDistribution.lineChart` ✅
+- [x] Filled the per-backend, per-minute query-count series from query history so the dashboard line chart renders
+  - [x] `persistence.HistoryDAO.FindDistribution(ctx, since)` — driver-specific per-minute bucketing (`date_trunc`/`DATE_FORMAT`), `GROUP BY minute, backend_url`; returns `[]DistributionBucket`
+  - [x] `webappGetDistribution` reads `latestHour` (default 1, Java parity), builds `lineChart map[name][]TimePoint` keyed by backend name (`buildLineChart`); empty map fallback on query error
+- [x] Tests; vet + lint pass (`TestAdmin_GetDistribution_LineChart`, persistence `FindDistribution` Postgres suite). Updated webapp study reconciliation #8.
 
-### Task 70 — `getUIConfiguration.disablePages` + page permissions (audit §3.12)
-- [ ] Return `disablePages` (and/or role→page permissions) so the UI sidebar can hide pages by role
-- [ ] Tests; vet + lint pass
+### Task 70 — `getUIConfiguration.disablePages` + page permissions (audit §3.12) ✅
+- [x] Return `disablePages` and role→page permissions so the UI sidebar can hide pages by role
+  - [x] config `ui.disablePages` ([]string) and `auth.authorization.pagePermissions` (role→`"page1_page2"`)
+  - [x] `getUIConfiguration` emits `disablePages` (always an array, never null); wired via `admin.Config.DisablePages`
+  - [x] `auth.ResolvePagePermissions(roles, map)` — Java `processPagePermissions` parity (union, dedup, unrestricted-role short-circuit); `/userinfo` returns the resolved `permissions`
+- [x] Tests; vet + lint pass (`auth.TestResolvePagePermissions`, `TestAdmin_GetUIConfiguration_DisablePages`, `TestAdmin_Userinfo_PagePermissions`). Audit §3.12 + config.example updated.
 
-### Task 71 — `findQueryHistory` filters + `getRoutingRules` verb
-- [ ] Ensure server-side `userName`/`backendUrl`/`pageSize` filters work (frontend aligns to these names); confirm `getRoutingRules` responds on the verb the frontend uses (no 405)
-- [ ] Tests; vet + lint pass
+### Task 71 — `findQueryHistory` filters + `getRoutingRules` verb ✅
+- [x] Verified server-side `userName`/`backendUrl`/`pageSize` filters work (handler maps the request to `persistence.HistoryFilter`; frontend `history.ts` aligns to these names)
+- [x] `getRoutingRules` answers on the frontend's POST verb (no 405) and returns 204 No Content (external-routing-only gateway → "external routing in use", Java parity); updated unit + e2e tests that previously expected 200/empty-list
+- [x] Tests; vet + lint pass (`TestAdmin_WebappFindQueryHistory_Filters`, `TestAdmin_WebappGetRoutingRules_NoContent`, updated `TestE2E_Webapp_RoutingRules`). Audit §3.7 + webapp study reconciliation #1-6 updated.
 
 ---
 
@@ -615,16 +633,16 @@ The standalone external router now exists at `routing-service/` (Go gRPC; plugga
 
 ### Task 73 — E2E: gateway ↔ real routing-service
 
-- [ ] Harness helper to build + launch the `routing-service` binary (separate Go module) exposing its data-plane + admin addrs; point the gateway at it via the existing `WithExternalGRPCRouter(addr)` option
-- [ ] `internal/e2e/routing_service_e2e_test.go` (`//go:build e2e`):
-  - [ ] `X-Trino-Source=airflow` → routed to the `etl` group via a real `expr` rule (proves `trino_source` round-trips gateway → service → decision end-to-end)
-  - [ ] `X-Trino-Client-Tags: tier=premium` → `premium` group (proves `client_tags` round-trip)
-  - [ ] routing-service down / returns an error → gateway **falls back to `routing.defaultGroup`** (no request dropped — Hard Invariant)
-  - [ ] kill-switch: disable a method via the `RoutingServiceAdmin` admin API → routing changes on the next request
-- [ ] `goleak`-clean; harness tears down the routing-service process on cleanup
-- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+- [x] Harness helper to build + launch the `routing-service` binary (separate Go module) exposing its data-plane + admin addrs; point the gateway at it via the existing `WithExternalGRPCRouter(addr)` option — `internal/e2e/harness/routing_service.go` (`StartRoutingService`; `TRINO_GOWAY_ROUTING_SERVICE_BIN` override mirrors `TRINO_GOWAY_BIN`). `RoutingServiceAdmin` client stubs vendored verbatim from the routing-service module under `internal/e2e/harness/routingadmin/` (no cross-module build dep)
+- [x] `internal/e2e/routing_service_e2e_test.go` (`//go:build e2e`):
+  - [x] `X-Trino-Source=airflow` → routed to the `etl` group via a real `expr` rule (proves `trino_source` round-trips gateway → service → decision end-to-end)
+  - [x] `X-Trino-Client-Tags: tier=premium` → `premium` group (proves `client_tags` round-trip)
+  - [x] routing-service down / returns an error → gateway **falls back to `routing.defaultGroup`** (no request dropped — Hard Invariant)
+  - [x] kill-switch: disable a method via the `RoutingServiceAdmin` admin API → routing changes on the next request
+- [x] harness tears down the routing-service process on cleanup (SIGTERM → 5s → SIGKILL via shared `shutdown`); in-process admin/health gRPC clients closed via `t.Cleanup`. The gateway is a black-box subprocess, so there is no in-process goroutine surface to `goleak`-guard (consistent with the rest of the e2e suite)
+- [x] `go vet ./...` + `go vet -tags e2e ./internal/e2e/...` pass. `golangci-lint`: the harness helper + vendored stubs are clean; the test file's `defer resp.Body.Close()` lines match the suite-wide `errcheck` pattern already present across `internal/e2e/*` (no root `.golangci.yml`; lint is not currently clean suite-wide for this convention)
 
 ### Task 74 — Parity check: mock vs real router (optional)
 
-- [ ] For an equivalent rule, the same request through `cmd/mock-external-router-grpc` and the real `routing-service` yields the identical `routingGroup` — confirms the gateway treats any conformant `TrinoGatewayRouter` interchangeably
-- [ ] `go vet ./...` pass
+- [x] For an equivalent rule, the same request through `cmd/mock-external-router-grpc` and the real `routing-service` yields the identical `routingGroup` — confirms the gateway treats any conformant `TrinoGatewayRouter` interchangeably — `internal/e2e/router_parity_e2e_test.go` (`TestE2E_RouterParity_MockVsRealService`): `X-Trino-Source=airflow` → `etl` via both the fixed-group mock (`--group etl`) and the real service's `airflow→etl` expr rule. New harness launcher `internal/e2e/harness/mock_router.go` (`StartMockGRPCRouter`; `TRINO_GOWAY_MOCK_ROUTER_BIN` override)
+- [x] `go vet ./...` + `go vet -tags e2e ./internal/e2e/...` pass; new test + launcher are golangci-lint clean

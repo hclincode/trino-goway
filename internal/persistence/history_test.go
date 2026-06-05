@@ -52,6 +52,30 @@ func runHistorySuite(t *testing.T, db *sqlx.DB) {
 		assert.Equal(t, "http://b1", url)
 	})
 
+	t.Run("Insert persists external_url and ListRecent returns it", func(t *testing.T) {
+		resetHistory(t, db)
+
+		now := time.Now().UTC().Truncate(time.Second)
+		require.NoError(t, dao.Insert(ctx, persistence.QueryRecord{
+			QueryID:     "q-ext",
+			BackendURL:  "http://b1:8080",
+			ExternalURL: "https://b1.example:443",
+			UserName:    "alice",
+			Source:      "cli",
+			CreatedAt:   now,
+		}))
+
+		got, err := dao.ListRecent(ctx, 1)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, "https://b1.example:443", got[0].ExternalURL)
+
+		recs, _, err := dao.FindByFilter(ctx, persistence.HistoryFilter{QueryID: "q-ext"})
+		require.NoError(t, err)
+		require.Len(t, recs, 1)
+		assert.Equal(t, "https://b1.example:443", recs[0].ExternalURL)
+	})
+
 	t.Run("LookupByQueryID missing returns empty string", func(t *testing.T) {
 		resetHistory(t, db)
 
@@ -246,6 +270,44 @@ func runHistorySuite(t *testing.T, db *sqlx.DB) {
 		assert.EqualValues(t, 1, total)
 		require.Len(t, recs, 1)
 		assert.Equal(t, "b", recs[0].QueryID)
+	})
+
+	t.Run("FindDistribution buckets by minute and backend", func(t *testing.T) {
+		resetHistory(t, db)
+
+		base := time.Now().UTC().Truncate(time.Minute).Add(-10 * time.Minute)
+		seed := []persistence.QueryRecord{
+			{QueryID: "a1", BackendURL: "http://a", CreatedAt: base},
+			{QueryID: "a2", BackendURL: "http://a", CreatedAt: base.Add(10 * time.Second)},
+			{QueryID: "a3", BackendURL: "http://a", CreatedAt: base.Add(time.Minute)},
+			{QueryID: "b1", BackendURL: "http://b", CreatedAt: base.Add(time.Minute)},
+			// Outside the window.
+			{QueryID: "old", BackendURL: "http://a", CreatedAt: base.Add(-2 * time.Hour)},
+		}
+		for _, r := range seed {
+			require.NoError(t, dao.Insert(ctx, r))
+		}
+
+		buckets, err := dao.FindDistribution(ctx, base.Add(-time.Minute))
+		require.NoError(t, err)
+
+		// Aggregate by (minute, url) for assertion independence from row order.
+		type key struct {
+			minute int64
+			url    string
+		}
+		got := make(map[key]int64)
+		for _, b := range buckets {
+			got[key{minute: b.MinuteStart.UTC().Unix(), url: b.BackendURL}] = b.QueryCount
+		}
+
+		assert.EqualValues(t, 2, got[key{base.Unix(), "http://a"}], "two http://a queries in minute 0")
+		assert.EqualValues(t, 1, got[key{base.Add(time.Minute).Unix(), "http://a"}])
+		assert.EqualValues(t, 1, got[key{base.Add(time.Minute).Unix(), "http://b"}])
+
+		// The out-of-window row must not appear.
+		_, hasOld := got[key{base.Add(-2 * time.Hour).Unix(), "http://a"}]
+		assert.False(t, hasOld, "rows before 'since' must be excluded")
 	})
 
 	t.Run("ListRecent on empty table returns empty slice", func(t *testing.T) {
