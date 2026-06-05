@@ -599,3 +599,32 @@ Go-side work the rebuilt web UI (`webapp/`, modern React) depends on. These real
 ### Task 71 — `findQueryHistory` filters + `getRoutingRules` verb
 - [ ] Ensure server-side `userName`/`backendUrl`/`pageSize` filters work (frontend aligns to these names); confirm `getRoutingRules` responds on the verb the frontend uses (no 405)
 - [ ] Tests; vet + lint pass
+
+---
+
+## Phase 11: Routing-service integration & verification
+
+The standalone external router now exists at `routing-service/` (Go gRPC; pluggable `expr` + Starlark methods, hot-reload, kill-switch, observability — see `routing-service/docs/`). It implements the `TrinoGatewayRouter` contract this gateway calls, so it serves as a **real external router for verifying the gateway's external-gRPC routing path** end-to-end (beyond `cmd/mock-external-router-grpc`). See `docs/PRD.md` §Routing Strategy → "Reference routing service".
+
+### Task 72 — Gateway proto: `trino_source` + `client_tags` ✅
+
+- [x] Add `trino_source` (12) + `client_tags` (13) to `internal/routing/routerpb/router.proto` (additive; field numbers wire-compatible with the routing-service vendored proto); regenerate stubs
+- [x] Populate in `internal/routing/external_grpc.go` `buildProtoRequest` — `trino_source` from `X-Trino-Source`; `client_tags` from `X-Trino-Client-Tags` (comma-split, trimmed, empties dropped, absent → empty non-nil slice)
+- [x] `internal/routing/routing_test.go` — source/tags matrix + `splitClientTags` unit tests
+- [x] `go build ./... && go vet ./...` + routing tests pass (gateway side of routing-service RS-14)
+
+### Task 73 — E2E: gateway ↔ real routing-service
+
+- [ ] Harness helper to build + launch the `routing-service` binary (separate Go module) exposing its data-plane + admin addrs; point the gateway at it via the existing `WithExternalGRPCRouter(addr)` option
+- [ ] `internal/e2e/routing_service_e2e_test.go` (`//go:build e2e`):
+  - [ ] `X-Trino-Source=airflow` → routed to the `etl` group via a real `expr` rule (proves `trino_source` round-trips gateway → service → decision end-to-end)
+  - [ ] `X-Trino-Client-Tags: tier=premium` → `premium` group (proves `client_tags` round-trip)
+  - [ ] routing-service down / returns an error → gateway **falls back to `routing.defaultGroup`** (no request dropped — Hard Invariant)
+  - [ ] kill-switch: disable a method via the `RoutingServiceAdmin` admin API → routing changes on the next request
+- [ ] `goleak`-clean; harness tears down the routing-service process on cleanup
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+
+### Task 74 — Parity check: mock vs real router (optional)
+
+- [ ] For an equivalent rule, the same request through `cmd/mock-external-router-grpc` and the real `routing-service` yields the identical `routingGroup` — confirms the gateway treats any conformant `TrinoGatewayRouter` interchangeably
+- [ ] `go vet ./...` pass

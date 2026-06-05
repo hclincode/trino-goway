@@ -49,6 +49,8 @@ Both transports carry identical request and response fields. The field contract 
 | `remoteAddr` | string | Client remote address |
 | `remoteHost` | string | Client remote host |
 | `parameterMap` | map | Request parameter map |
+| `trinoSource` | string | `X-Trino-Source` (e.g. `airflow`, `superset`) — the primary routing signal. gRPC proto field `trino_source` (12); HTTP transport forwards the header directly. |
+| `clientTags` | array | `X-Trino-Client-Tags`, pre-split on comma (trimmed, empties dropped). gRPC proto field `client_tags` (13); HTTP transport forwards the header directly. |
 
 **Response fields** (same as `ExternalRouterResponse` in the original):
 
@@ -61,6 +63,12 @@ Both transports carry identical request and response fields. The field contract 
 **Fallback behavior:** if the external service is unreachable, returns an error, or returns invalid JSON — the gateway falls back gracefully and routes the request to the default routing group. No request is dropped.
 
 External routing is the sole routing extensibility mechanism. Operators implement routing logic in their own service in any language they choose. The gateway is not the logic host.
+
+### Reference routing service (`routing-service/`)
+
+A production-ready reference external router ships in this repo at [`routing-service/`](../routing-service/) — a standalone Go gRPC service implementing `TrinoGatewayRouter` with a pluggable, multi-method engine (`expr` + Starlark routing logic), hot-reload with validate-before-activate, a kill-switch admin API, and Prometheus/OTel observability (see `routing-service/docs/`). It serves three purposes: a fork-ready example for operators, the **verification harness** for the gateway's external-gRPC routing path (real rules end-to-end, not just `cmd/mock-external-router-grpc`), and the home for routing logic that the deliberately-dropped MVEL file rules used to host. Standalone CLI tools (`routing-service/tools/{expr-test,starlark-test}`) evaluate routing logic exactly as the service would.
+
+> **gRPC signal additions:** the gRPC transport carries structured fields rather than raw headers, so `RouteRequest` now includes `trino_source` (field 12) and `client_tags` (field 13) — the two most-used routing signals — populated by `buildProtoRequest` from `X-Trino-Source` / `X-Trino-Client-Tags`. Field numbers are wire-compatible with the routing-service's vendored proto.
 
 ---
 
