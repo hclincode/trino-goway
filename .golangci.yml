@@ -1,0 +1,60 @@
+# Root golangci-lint config for the main module
+# (github.com/hclincode/trino-goway). The routing-service/ submodule is a
+# SEPARATE Go module and carries its own routing-service/.golangci.yml; this
+# file does not govern it.
+#
+# Purpose: codify the de-facto lint baseline the team already runs so the
+# per-task "golangci-lint run ./... pass" gate is honest and uniform, instead of
+# being re-interpreted per package. This config is deliberately PERMISSIVE — it
+# matches the linter set established in routing-service/.golangci.yml and
+# docs/CODING_CONVENTIONS.md §D3, and excludes only the established conventions
+# (notably the unactionable deferred Body.Close() error). It adds NO new
+# strictness over what was already in effect.
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - bodyclose
+    - exhaustive
+    - ineffassign
+    - misspell
+
+  settings:
+    exhaustive:
+      # A `default:` case satisfies exhaustiveness — matches routing-service.
+      default-signifies-exhaustive: true
+
+  exclusions:
+    # std-error-handling is golangci-lint's built-in preset that excludes
+    # errcheck on the conventional unactionable closers/writers — most
+    # importantly `defer resp.Body.Close()` on HTTP responses. The gateway uses
+    # this pattern in production (internal/proxy/forward.go) and across the e2e
+    # / diff-harness test files; it is an established convention, not a bug.
+    # Codifying it here stops devs from hand-wrangling Body.Close per file.
+    presets:
+      - std-error-handling
+    rules:
+      # Test files follow the same Body.Close convention as the
+      # std-error-handling preset: response bodies in tests (often on error
+      # paths where the response is nil, e.g. asserting a stopped server) are
+      # not closed. bodyclose still guards production code. Excluding it in
+      # _test.go matches the established convention and keeps this config
+      # purely permissive (no new findings over the de-facto baseline).
+      - path: "_test\\.go"
+        linters:
+          - bodyclose
+      # Generated protobuf stubs (if any land in the main module) are exempt
+      # from all linters, mirroring routing-service/.golangci.yml.
+      - path: ".*\\.pb\\.go"
+        linters:
+          - errcheck
+          - staticcheck
+          - govet
+      - path: ".*_grpc\\.pb\\.go"
+        linters:
+          - errcheck
+          - staticcheck
+          - govet

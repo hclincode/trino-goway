@@ -105,7 +105,7 @@ func TestRun_ExtractAndPathFromVar(t *testing.T) {
 		switch r.URL.Path {
 		case "/v1/statement":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(fmt.Sprintf(`{"id":"q1","nextUri":"%s/v1/statement/q1/1"}`, "http://"+r.Host)))
+			_, _ = fmt.Fprintf(w, `{"id":"q1","nextUri":"%s/v1/statement/q1/1"}`, "http://"+r.Host)
 		case "/v1/statement/q1/1":
 			atomic.AddInt32(&nextURICalls, 1)
 			w.Header().Set("Content-Type", "application/json")
@@ -147,7 +147,7 @@ func TestRun_RepeatUntilNoField(t *testing.T) {
 		n := atomic.AddInt32(&hits, 1)
 		w.Header().Set("Content-Type", "application/json")
 		if n < 3 {
-			_, _ = w.Write([]byte(fmt.Sprintf(`{"nextUri":"%s/v1/poll"}`, "http://"+r.Host)))
+			_, _ = fmt.Fprintf(w, `{"nextUri":"%s/v1/poll"}`, "http://"+r.Host)
 			return
 		}
 		_, _ = w.Write([]byte(`{}`)) // no nextUri → loop terminates

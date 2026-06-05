@@ -232,7 +232,11 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 
 - **`goimports`** (subsumes `gofmt`): required; CI fails on diff
 - **`go vet`**: required
-- **`golangci-lint`**: required with the linter set in §D3
+- **`golangci-lint`**: required with the linter set in §D3, codified in the root
+  `.golangci.yml` (and `routing-service/.golangci.yml` for that module). Run
+  `golangci-lint run ./...`. The root config enables the `std-error-handling`
+  exclusion preset so the conventional unactionable `resp.Body.Close()` /
+  `fmt.Fprint*` error returns do not need per-file `_ =` wrangling.
 - **Line length**: no hard limit; wrap signatures at ~100 chars when they exceed screen width
 - **`_` variables**: permitted only in blank imports, range-only loops, and compile-time interface assertions (§4)
 
