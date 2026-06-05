@@ -16,6 +16,7 @@ import (
 	"github.com/hclincode/trino-goway-routing-service/internal/engine"
 	exprovider "github.com/hclincode/trino-goway-routing-service/internal/engine/providers/expr"
 	scriptprovider "github.com/hclincode/trino-goway-routing-service/internal/engine/providers/script"
+	"github.com/hclincode/trino-goway-routing-service/internal/reload"
 	"github.com/hclincode/trino-goway-routing-service/internal/server"
 )
 
@@ -72,6 +73,15 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
+
+	// RS-6: hot-reload. Watch the config file and validate-before-activate on
+	// every change; invalid configs keep the last-known-good pipeline live.
+	watcher := reload.New(*configPath, pipeline, reg, log)
+	if err := watcher.Start(ctx); err != nil {
+		log.Error("routing-service: config watcher failed to start", "err", err)
+		os.Exit(1)
+	}
+	defer watcher.Stop()
 
 	if err := srv.Start(ctx); err != nil {
 		log.Error("routing-service: server error", "err", err)

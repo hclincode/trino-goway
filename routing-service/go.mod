@@ -4,6 +4,7 @@ go 1.26.3
 
 require (
 	github.com/expr-lang/expr v1.17.8
+	github.com/fsnotify/fsnotify v1.10.1
 	go.starlark.net v0.0.0-20260522144826-ec58d4b459e2
 	go.uber.org/goleak v1.3.0
 	google.golang.org/grpc v1.71.1
