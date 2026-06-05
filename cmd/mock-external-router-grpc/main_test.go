@@ -114,10 +114,13 @@ func TestRoute(t *testing.T) {
 				t.Errorf("externalHeaders: got %#v, want empty", resp.GetExternalHeaders())
 			}
 
-			got := out.String()
+			// protojson's inter-token whitespace is intentionally unstable (it
+			// varies with the message descriptor), so normalise runs of
+			// whitespace to single spaces before asserting field presence.
+			got := normalizeWS(out.String())
 			for _, want := range tc.wantOutput {
-				if !strings.Contains(got, want) {
-					t.Errorf("output missing %q\nfull output:\n%s", want, got)
+				if !strings.Contains(got, normalizeWS(want)) {
+					t.Errorf("output missing %q\nfull output:\n%s", want, out.String())
 				}
 			}
 		})
@@ -165,4 +168,11 @@ func TestReflectionRegistered(t *testing.T) {
 	if err := stream.CloseSend(); err != nil {
 		t.Errorf("CloseSend: %v", err)
 	}
+}
+
+// normalizeWS collapses every run of whitespace in s to a single space. Used to
+// make assertions on protojson output independent of its (intentionally
+// unstable) inter-token spacing.
+func normalizeWS(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }

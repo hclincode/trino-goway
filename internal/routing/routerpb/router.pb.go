@@ -45,7 +45,13 @@ type RouteRequest struct {
 	// Client hostname; may equal remote_addr if no reverse DNS.
 	RemoteHost string `protobuf:"bytes,10,opt,name=remote_host,json=remoteHost,proto3" json:"remote_host,omitempty"`
 	// URL and form parameters. Multi-valued params are comma-joined.
-	ParameterMap  map[string]string `protobuf:"bytes,11,rep,name=parameter_map,json=parameterMap,proto3" json:"parameter_map,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	ParameterMap map[string]string `protobuf:"bytes,11,rep,name=parameter_map,json=parameterMap,proto3" json:"parameter_map,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// X-Trino-Source header value (e.g. "airflow", "superset", "dbt").
+	// Field number 12 matches the routing-service vendored proto (wire compat).
+	TrinoSource string `protobuf:"bytes,12,opt,name=trino_source,json=trinoSource,proto3" json:"trino_source,omitempty"`
+	// X-Trino-Client-Tags header value, pre-split on comma (trimmed, non-empty).
+	// Field number 13 matches the routing-service vendored proto (wire compat).
+	ClientTags    []string `protobuf:"bytes,13,rep,name=client_tags,json=clientTags,proto3" json:"client_tags,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -146,6 +152,20 @@ func (x *RouteRequest) GetRemoteHost() string {
 func (x *RouteRequest) GetParameterMap() map[string]string {
 	if x != nil {
 		return x.ParameterMap
+	}
+	return nil
+}
+
+func (x *RouteRequest) GetTrinoSource() string {
+	if x != nil {
+		return x.TrinoSource
+	}
+	return ""
+}
+
+func (x *RouteRequest) GetClientTags() []string {
+	if x != nil {
+		return x.ClientTags
 	}
 	return nil
 }
@@ -419,7 +439,7 @@ var File_router_proto protoreflect.FileDescriptor
 
 const file_router_proto_rawDesc = "" +
 	"\n" +
-	"\frouter.proto\x12\x10trino.gateway.v1\"\xb8\x04\n" +
+	"\frouter.proto\x12\x10trino.gateway.v1\"\xfc\x04\n" +
 	"\fRouteRequest\x12\\\n" +
 	"\x16trino_query_properties\x18\x01 \x01(\v2&.trino.gateway.v1.TrinoQueryPropertiesR\x14trinoQueryProperties\x12P\n" +
 	"\x12trino_request_user\x18\x02 \x01(\v2\".trino.gateway.v1.TrinoRequestUserR\x10trinoRequestUser\x12!\n" +
@@ -435,7 +455,10 @@ const file_router_proto_rawDesc = "" +
 	"\vremote_host\x18\n" +
 	" \x01(\tR\n" +
 	"remoteHost\x12U\n" +
-	"\rparameter_map\x18\v \x03(\v20.trino.gateway.v1.RouteRequest.ParameterMapEntryR\fparameterMap\x1a?\n" +
+	"\rparameter_map\x18\v \x03(\v20.trino.gateway.v1.RouteRequest.ParameterMapEntryR\fparameterMap\x12!\n" +
+	"\ftrino_source\x18\f \x01(\tR\vtrinoSource\x12\x1f\n" +
+	"\vclient_tags\x18\r \x03(\tR\n" +
+	"clientTags\x1a?\n" +
 	"\x11ParameterMapEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xf1\x01\n" +

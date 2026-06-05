@@ -104,5 +104,26 @@ func buildProtoRequest(req *RouteInput) *pb.RouteRequest {
 		RemoteAddr:           req.RemoteAddr,
 		RemoteHost:           req.RemoteHost,
 		ParameterMap:         paramMap,
+		// Phase 1 routing signals (routing-service PRD §4.1). The HTTP transport
+		// forwards all headers verbatim, so these are gRPC-only.
+		TrinoSource: req.Header("X-Trino-Source"),
+		ClientTags:  splitClientTags(req.Header("X-Trino-Client-Tags")),
 	}
+}
+
+// splitClientTags parses the X-Trino-Client-Tags header into individual tags:
+// comma-separated, surrounding whitespace trimmed, empty entries dropped. An
+// absent or empty header yields an empty (non-nil) slice. The routing-service
+// expects tags pre-split — it does not re-parse the header.
+func splitClientTags(header string) []string {
+	tags := []string{}
+	if header == "" {
+		return tags
+	}
+	for _, raw := range strings.Split(header, ",") {
+		if t := strings.TrimSpace(raw); t != "" {
+			tags = append(tags, t)
+		}
+	}
+	return tags
 }

@@ -31,6 +31,12 @@ message RouteRequest {
   string remote_host = 10;
   // URL and form parameters. Multi-valued params are comma-joined.
   map<string, string> parameter_map = 11;
+  // X-Trino-Source header value (e.g. "airflow", "superset", "dbt").
+  // Field number 12 matches the routing-service vendored proto (wire compat).
+  string trino_source = 12;
+  // X-Trino-Client-Tags header value, pre-split on comma (trimmed, non-empty).
+  // Field number 13 matches the routing-service vendored proto (wire compat).
+  repeated string client_tags = 13;
 }
 
 // RouteResponse mirrors ExternalRouterResponse.java.

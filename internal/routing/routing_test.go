@@ -26,8 +26,7 @@ type fakeHistory struct {
 }
 
 func (f *fakeHistory) LookupByQueryID(_ context.Context, queryID string) (string, error) {
-	url, _ := f.data[queryID]
-	return url, nil
+	return f.data[queryID], nil
 }
 
 type fakeBackends struct {
@@ -479,4 +478,72 @@ func TestRouter_NoExternalConfig_SkipsExternalCall(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "http://trino-only:8080", result.BackendURL,
 		"single-cluster mode must resolve via default group without external call")
+}
+
+// --- RS-14: trino_source + client_tags proto round-trip ---
+
+// routeInputWithHeaders builds a RouteInput carrying the given headers.
+func routeInputWithHeaders(h map[string]string) *RouteInput {
+	hdr := make(http.Header)
+	for k, v := range h {
+		hdr.Set(k, v)
+	}
+	return &RouteInput{Method: "POST", RequestURI: "/v1/statement", headers: hdr}
+}
+
+func TestBuildProtoRequest_TrinoSource(t *testing.T) {
+	req := routeInputWithHeaders(map[string]string{"X-Trino-Source": "airflow"})
+	got := buildProtoRequest(req)
+	assert.Equal(t, "airflow", got.GetTrinoSource())
+}
+
+func TestBuildProtoRequest_TrinoSourceAbsent(t *testing.T) {
+	req := routeInputWithHeaders(nil)
+	got := buildProtoRequest(req)
+	assert.Equal(t, "", got.GetTrinoSource())
+}
+
+func TestBuildProtoRequest_ClientTags(t *testing.T) {
+	cases := []struct {
+		name   string
+		header string
+		want   []string
+	}{
+		{"absent", "", []string{}},
+		{"single", "tier=premium", []string{"tier=premium"}},
+		{"multiple", "tier=premium,team=ds", []string{"tier=premium", "team=ds"}},
+		{"trimmed", " tier=premium , team=ds ", []string{"tier=premium", "team=ds"}},
+		{"empty-entries-dropped", "a,,b,", []string{"a", "b"}},
+		{"only-commas", ",,,", []string{}},
+		{"whitespace-only-entry", "a, ,b", []string{"a", "b"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := map[string]string{}
+			if tc.header != "" {
+				h["X-Trino-Client-Tags"] = tc.header
+			}
+			got := buildProtoRequest(routeInputWithHeaders(h))
+			assert.Equal(t, tc.want, got.GetClientTags())
+		})
+	}
+}
+
+func TestBuildProtoRequest_ClientTagsAndSourceTogether(t *testing.T) {
+	req := routeInputWithHeaders(map[string]string{
+		"X-Trino-Source":      "superset",
+		"X-Trino-Client-Tags": "tier=premium, region=us",
+	})
+	got := buildProtoRequest(req)
+	assert.Equal(t, "superset", got.GetTrinoSource())
+	assert.Equal(t, []string{"tier=premium", "region=us"}, got.GetClientTags())
+}
+
+func TestSplitClientTags(t *testing.T) {
+	assert.Equal(t, []string{}, splitClientTags(""))
+	assert.Equal(t, []string{}, splitClientTags("   "))
+	assert.Equal(t, []string{"x"}, splitClientTags("x"))
+	assert.Equal(t, []string{"x", "y"}, splitClientTags(" x , y "))
+	// Always non-nil so the proto serialises an empty repeated field, not null.
+	assert.NotNil(t, splitClientTags(""))
 }
