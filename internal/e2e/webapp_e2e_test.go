@@ -185,25 +185,19 @@ func TestE2E_Webapp_FindQueryHistory(t *testing.T) {
 	assert.True(t, hasRows, "expected TableData.rows field")
 }
 
-// TestE2E_Webapp_RoutingRulesStubs verifies the v1 stubs:
-// getRoutingRules returns an empty array; updateRoutingRules accepts {}.
-func TestE2E_Webapp_RoutingRulesStubs(t *testing.T) {
+// TestE2E_Webapp_RoutingRules verifies external-routing semantics:
+// getRoutingRules answers 204 (rules managed externally); updateRoutingRules
+// accepts {}.
+func TestE2E_Webapp_RoutingRules(t *testing.T) {
 	h := harness.New(t)
 	client := h.AdminClient("")
 
 	resp, err := client.Post(h.AdminURL+"/webapp/getRoutingRules", "application/json", strings.NewReader(""))
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var env struct {
-		Code int                      `json:"code"`
-		Msg  string                   `json:"msg"`
-		Data []map[string]interface{} `json:"data"`
-	}
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&env))
-	assert.Equal(t, 200, env.Code)
-	assert.Empty(t, env.Data, "expected empty routing rules array")
+	// The Go gateway is external-routing-only: 204 signals "external routing in
+	// use", which the UI reads via postMaybeNoContent.
+	require.Equal(t, http.StatusNoContent, resp.StatusCode)
 
 	resp2, err := client.Post(h.AdminURL+"/webapp/updateRoutingRules", "application/json", strings.NewReader("{}"))
 	require.NoError(t, err)
@@ -235,4 +229,3 @@ func TestE2E_Webapp_RoleEnforcement(t *testing.T) {
 	require.NoError(t, resp2.Body.Close())
 	assert.Equal(t, http.StatusForbidden, resp2.StatusCode, "/webapp/saveBackend should require ADMIN role")
 }
-

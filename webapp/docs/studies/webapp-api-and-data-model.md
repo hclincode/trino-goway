@@ -340,13 +340,13 @@ None of these are called from any component in the current codebase. They are de
 
 | # | Endpoint | Field | Frontend sends | Go expects | Impact |
 |---|---|---|---|---|---|
-| 1 | `findQueryHistory` | user filter field | `user` | `userName` | User filter never applied |
-| 2 | `findQueryHistory` | backend filter field | `externalUrl` | `backendUrl` | Backend filter never applied |
-| 3 | `findQueryHistory` | page size field | `size` | `pageSize` | Pagination size never applied (defaults to 0 = unfiltered) |
-| 4 | `findQueryHistory` response | external URL | `externalUrl` | always `""` | QueryId links broken; RoutedTo column empty |
-| 5 | `getUIConfiguration` response | page hiding | reads `disablePages` | struct has no `disablePages` | Page hiding never works |
-| 6 | `getRoutingRules` | HTTP method | GET | POST registered | Always 405 |
-| 7 | `getAllBackends` response | external URL | always present | `omitempty` | Missing field on backends without externalUrl |
-| 8 | `getDistribution` response | line chart | expects populated data | always `{}` | Line chart always empty |
+| 1 | `findQueryHistory` | user filter field | `userName` (frontend aligned to Go) | `userName` | RESOLVED (Task 71) — server-side filter verified |
+| 2 | `findQueryHistory` | backend filter field | `backendUrl` (frontend aligned to Go) | `backendUrl` | RESOLVED (Task 71) — server-side filter verified |
+| 3 | `findQueryHistory` | page size field | `pageSize` (frontend aligned to Go) | `pageSize` | RESOLVED (Task 71) — pagination verified |
+| 4 | `findQueryHistory` response | external URL | `externalUrl` | ~~always `""`~~ → populated (Task 67); falls back to `backendUrl` | RESOLVED |
+| 5 | `getUIConfiguration` response | page hiding | reads `disablePages` | ~~no `disablePages`~~ → emitted (Task 70) | RESOLVED |
+| 6 | `getRoutingRules` | HTTP method / verb | POST (frontend `postMaybeNoContent`) | POST → ~~200 empty list~~ → 204 (external routing, Task 71) | RESOLVED — no 405; 204 signals external routing |
+| 7 | `getAllBackends` response | external URL | always present | ~~`omitempty`~~ → always emitted (Task 68); falls back to `proxyTo` | RESOLVED |
+| 8 | `getDistribution` response | line chart | expects populated data | ~~always `{}`~~ → per-backend, per-minute series keyed by name (Task 69) | RESOLVED |
 
-The rebuild should fix mismatches 1–4 and 6 as part of achieving functional parity.
+All eight reconciliation items are now resolved on the Go side (Tasks 67–71); the rebuilt frontend aligns its `findQueryHistory` request field names to the Go contract.

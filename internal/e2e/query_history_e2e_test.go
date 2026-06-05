@@ -127,6 +127,11 @@ func TestE2E_History_RecordedAfterStatement(t *testing.T) {
 			assert.Equal(t, "alice", rec.User, "record userName")
 			assert.Containsf(t, rec.BackendURL, fake.URL,
 				"backendUrl %q should contain fake URL %q", rec.BackendURL, fake.URL)
+			// audit §3.7/M5: externalUrl is always populated, falling back to the
+			// backend URL when the backend has no explicit external_url.
+			assert.NotEmpty(t, rec.ExternalURL, "externalUrl must be populated")
+			assert.Equalf(t, rec.BackendURL, rec.ExternalURL,
+				"externalUrl %q should fall back to backendUrl %q", rec.ExternalURL, rec.BackendURL)
 			return
 		}
 		time.Sleep(100 * time.Millisecond)

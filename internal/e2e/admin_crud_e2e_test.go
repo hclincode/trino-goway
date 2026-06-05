@@ -105,6 +105,12 @@ func TestE2E_Admin_BackendWireShape(t *testing.T) {
 	assert.Equal(t, "http://fake:8888", found["proxyTo"])
 	assert.Equal(t, true, found["active"])
 	assert.Equal(t, "etl", found["routingGroup"])
+
+	// audit M6: externalUrl is always present (no omitempty) and falls back to
+	// proxyTo when the client did not supply one.
+	_, hasExternalURL := found["externalUrl"]
+	assert.True(t, hasExternalURL, "externalUrl must be present on the wire")
+	assert.Equal(t, "http://fake:8888", found["externalUrl"])
 }
 
 // TestE2E_Admin_EntityAPI_AddAndList verifies that a backend POSTed to

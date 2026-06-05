@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	neturl "net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,6 +49,9 @@ func NewOIDCServer(t testing.TB) *OIDCServer {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/jwks.json", s.handleJWKS)
+	mux.HandleFunc("/.well-known/openid-configuration", s.handleDiscovery)
+	mux.HandleFunc("/authorize", s.handleAuthorize)
+	mux.HandleFunc("/token", s.handleToken)
 
 	s.server = httptest.NewServer(mux)
 	s.URL = s.server.URL
@@ -55,6 +59,81 @@ func NewOIDCServer(t testing.TB) *OIDCServer {
 	t.Cleanup(s.server.Close)
 
 	return s
+}
+
+// AuthorizeURL returns the authorization endpoint, for the gateway's
+// auth.oidc.authorizationEndpoint config value in tests.
+func (s *OIDCServer) AuthorizeURL() string { return s.URL + "/authorize" }
+
+// TokenURL returns the token endpoint, for the gateway's
+// auth.oidc.tokenEndpoint config value in tests.
+func (s *OIDCServer) TokenURL() string { return s.URL + "/token" }
+
+// handleDiscovery serves the minimal OIDC discovery document the gateway reads
+// to resolve the authorization and token endpoints.
+func (s *OIDCServer) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"issuer":                 s.URL,
+		"authorization_endpoint": s.AuthorizeURL(),
+		"token_endpoint":         s.TokenURL(),
+		"jwks_uri":               s.JWKSURL(),
+	})
+}
+
+// handleAuthorize simulates the IdP login page auto-approving: it redirects back
+// to the client's redirect_uri with a code that encodes the requested nonce, so
+// the token endpoint can mint an id_token carrying that nonce.
+func (s *OIDCServer) handleAuthorize(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	redirectURI := q.Get("redirect_uri")
+	state := q.Get("state")
+	nonce := q.Get("nonce")
+	if redirectURI == "" {
+		http.Error(w, "missing redirect_uri", http.StatusBadRequest)
+		return
+	}
+	// Encode the nonce into the code so /token can echo it into the id_token.
+	code := "code." + base64.RawURLEncoding.EncodeToString([]byte(nonce))
+
+	u, err := neturl.Parse(redirectURI)
+	if err != nil {
+		http.Error(w, "bad redirect_uri", http.StatusBadRequest)
+		return
+	}
+	rq := u.Query()
+	rq.Set("code", code)
+	rq.Set("state", state)
+	u.RawQuery = rq.Encode()
+	http.Redirect(w, r, u.String(), http.StatusFound)
+}
+
+// handleToken exchanges the authorization code for an id_token. The nonce is
+// recovered from the code and embedded in the issued token.
+func (s *OIDCServer) handleToken(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	code := r.PostFormValue("code")
+	nonce := ""
+	if rest, ok := strings.CutPrefix(code, "code."); ok {
+		if raw, err := base64.RawURLEncoding.DecodeString(rest); err == nil {
+			nonce = string(raw)
+		}
+	}
+
+	idToken := s.IssueTokenWithClaims("web-user", []string{"admins"}, time.Hour, map[string]any{
+		"nonce": nonce,
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"id_token":     idToken,
+		"access_token": idToken,
+		"token_type":   "Bearer",
+		"expires_in":   3600,
+	})
 }
 
 // JWKSURL returns the URL of the JWKS endpoint.
@@ -80,6 +159,37 @@ func (s *OIDCServer) IssueToken(sub string, groups []string, ttl time.Duration) 
 		"exp":      now.Add(ttl).Unix(),
 		"groups":   groups,
 		"memberOf": strings.Join(groups, ","),
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = kid
+
+	signed, err := token.SignedString(key)
+	if err != nil {
+		panic("testutil: oidc: sign token: " + err.Error())
+	}
+	return signed
+}
+
+// IssueTokenWithClaims is like IssueToken but merges the supplied extra claims
+// (e.g. "nonce") into the token before signing.
+func (s *OIDCServer) IssueTokenWithClaims(sub string, groups []string, ttl time.Duration, extra map[string]any) string {
+	s.mu.RLock()
+	key := s.key
+	kid := s.kid
+	s.mu.RUnlock()
+
+	now := time.Now()
+	claims := jwt.MapClaims{
+		"sub":      sub,
+		"iss":      s.URL,
+		"iat":      now.Unix(),
+		"exp":      now.Add(ttl).Unix(),
+		"groups":   groups,
+		"memberOf": strings.Join(groups, ","),
+	}
+	for k, v := range extra {
+		claims[k] = v
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
@@ -139,4 +249,3 @@ func encodeExponent(e int) []byte {
 	}
 	return []byte{0}
 }
-

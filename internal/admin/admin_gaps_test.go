@@ -55,6 +55,9 @@ func (e *errorHistoryStore) ListRecent(context.Context, int) ([]persistence.Quer
 func (e *errorHistoryStore) FindByFilter(context.Context, persistence.HistoryFilter) ([]persistence.QueryRecord, int64, error) {
 	return nil, 0, e.err
 }
+func (e *errorHistoryStore) FindDistribution(context.Context, time.Time) ([]persistence.DistributionBucket, error) {
+	return nil, e.err
+}
 
 // ---- Helpers ----
 
@@ -166,11 +169,11 @@ func TestAdmin_RoleMatrix_WriteEndpoints403(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Build four admin instances, each granting exactly one role to the caller.
 			cases := []struct {
-				label   string
-				p       *auth.Principal
-				adminRE string
-				userRE  string
-				apiRE   string
+				label     string
+				p         *auth.Principal
+				adminRE   string
+				userRE    string
+				apiRE     string
 				expect403 bool
 			}{
 				{"admin-only", principalAdmin, "admins", "", "", tc.denyAdmin},

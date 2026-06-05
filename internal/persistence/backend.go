@@ -2,6 +2,8 @@ package persistence
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 type Backend struct {
 	Name         string    `db:"name"`
 	URL          string    `db:"url"`
+	ExternalURL  string    `db:"external_url"`
 	RoutingGroup string    `db:"routing_group"`
 	Active       bool      `db:"active"`
 	CreatedAt    time.Time `db:"created_at"`
@@ -31,7 +34,7 @@ func NewBackendDAO(db *sqlx.DB) *BackendDAO {
 // List returns all backends.
 func (d *BackendDAO) List(ctx context.Context) ([]Backend, error) {
 	var backends []Backend
-	if err := d.db.SelectContext(ctx, &backends, `SELECT name, url, routing_group, active, created_at, updated_at FROM gateway_backend`); err != nil {
+	if err := d.db.SelectContext(ctx, &backends, `SELECT name, url, external_url, routing_group, active, created_at, updated_at FROM gateway_backend`); err != nil {
 		return nil, fmt.Errorf("persistence: backend: list: %w", err)
 	}
 	return backends, nil
@@ -43,19 +46,21 @@ func (d *BackendDAO) Upsert(ctx context.Context, b Backend) error {
 	switch d.db.DriverName() {
 	case "postgres":
 		query = `
-INSERT INTO gateway_backend (name, url, routing_group, active, created_at, updated_at)
-VALUES (:name, :url, :routing_group, :active, :created_at, :updated_at)
+INSERT INTO gateway_backend (name, url, external_url, routing_group, active, created_at, updated_at)
+VALUES (:name, :url, :external_url, :routing_group, :active, :created_at, :updated_at)
 ON CONFLICT (name) DO UPDATE SET
     url           = EXCLUDED.url,
+    external_url  = EXCLUDED.external_url,
     routing_group = EXCLUDED.routing_group,
     active        = EXCLUDED.active,
     updated_at    = EXCLUDED.updated_at`
 	case "mysql":
 		query = `
-INSERT INTO gateway_backend (name, url, routing_group, active, created_at, updated_at)
-VALUES (:name, :url, :routing_group, :active, :created_at, :updated_at)
+INSERT INTO gateway_backend (name, url, external_url, routing_group, active, created_at, updated_at)
+VALUES (:name, :url, :external_url, :routing_group, :active, :created_at, :updated_at)
 ON DUPLICATE KEY UPDATE
     url           = VALUES(url),
+    external_url  = VALUES(external_url),
     routing_group = VALUES(routing_group),
     active        = VALUES(active),
     updated_at    = VALUES(updated_at)`
@@ -87,10 +92,30 @@ func (d *BackendDAO) SetActive(ctx context.Context, name string, active bool) er
 	return nil
 }
 
+// LookupExternalURL returns the external_url for the backend with the given
+// url. When the backend has no external_url set, or no backend matches, it
+// returns the url unchanged, mirroring Java's getExternalUrl() fallback to
+// proxyTo. This is used to stamp query_history.external_url at capture time.
+func (d *BackendDAO) LookupExternalURL(ctx context.Context, url string) (string, error) {
+	var externalURL string
+	query := d.db.Rebind(`SELECT external_url FROM gateway_backend WHERE url = ?`)
+	err := d.db.QueryRowContext(ctx, query, url).Scan(&externalURL)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return url, nil
+	case err != nil:
+		return "", fmt.Errorf("persistence: backend: lookup external url: %w", err)
+	}
+	if externalURL == "" {
+		return url, nil
+	}
+	return externalURL, nil
+}
+
 // ListActive returns only active backends.
 func (d *BackendDAO) ListActive(ctx context.Context) ([]Backend, error) {
 	var backends []Backend
-	if err := d.db.SelectContext(ctx, &backends, `SELECT name, url, routing_group, active, created_at, updated_at FROM gateway_backend WHERE active = true`); err != nil {
+	if err := d.db.SelectContext(ctx, &backends, `SELECT name, url, external_url, routing_group, active, created_at, updated_at FROM gateway_backend WHERE active = true`); err != nil {
 		return nil, fmt.Errorf("persistence: backend: list active: %w", err)
 	}
 	return backends, nil

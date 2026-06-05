@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -49,7 +50,7 @@ type DistributionResponse struct {
 	TotalQueryCount       int64                  `json:"totalQueryCount"`
 	AvgQueryCountMinute   float64                `json:"averageQueryCountMinute"`
 	AvgQueryCountSecond   float64                `json:"averageQueryCountSecond"`
-	StartTime             string                 `json:"startTime"`        // ISO-8601 with ms
+	StartTime             string                 `json:"startTime"` // ISO-8601 with ms
 	DistributionChart     []ChartPoint           `json:"distributionChart"`
 	LineChart             map[string][]TimePoint `json:"lineChart"`
 }
@@ -72,6 +73,9 @@ type TimePoint struct {
 // UIConfiguration holds front-end feature flags.
 type UIConfiguration struct {
 	AuthType string `json:"authType"`
+	// DisablePages lists page keys hidden from the UI sidebar. Always present
+	// (empty slice, not null) so the UI can treat it uniformly.
+	DisablePages []string `json:"disablePages"`
 }
 
 // webappGetAllBackends returns all backends with live status.
@@ -144,10 +148,25 @@ func (a *Admin) webappFindQueryHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resultOK(TableData[QueryDetail]{Total: total, Rows: rows}))
 }
 
+// DistributionRequest is the request body for getDistribution.
+type DistributionRequest struct {
+	// LatestHour bounds the line chart to the last N hours. Defaults to 1 when
+	// omitted or non-positive, matching Java's QueryDistributionRequest.
+	LatestHour int `json:"latestHour"`
+}
+
 // webappGetDistribution returns distribution statistics.
 // POST /webapp/getDistribution
 func (a *Admin) webappGetDistribution(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+
+	var req DistributionRequest
+	// Body is optional; the UI posts {}. Ignore decode errors and use defaults.
+	_ = decodeJSON(r, &req)
+	latestHour := req.LatestHour
+	if latestHour <= 0 {
+		latestHour = 1
+	}
 
 	backends, err := a.cfg.Backends.List(ctx)
 	if err != nil {
@@ -159,6 +178,7 @@ func (a *Admin) webappGetDistribution(w http.ResponseWriter, r *http.Request) {
 	var total, online, offline, healthy, unhealthy int
 	dist := make(map[string]int64)
 	chart := make([]ChartPoint, 0, len(backends))
+	urlToName := make(map[string]string, len(backends))
 
 	for _, b := range backends {
 		total++
@@ -175,6 +195,7 @@ func (a *Admin) webappGetDistribution(w http.ResponseWriter, r *http.Request) {
 			unhealthy++
 		}
 		dist[b.URL] = 0
+		urlToName[b.URL] = b.Name
 		chart = append(chart, ChartPoint{
 			BackendURL: b.URL,
 			Name:       b.Name,
@@ -208,6 +229,8 @@ func (a *Admin) webappGetDistribution(w http.ResponseWriter, r *http.Request) {
 		avgPerMinute = avgPerSecond * 60
 	}
 
+	lineChart := a.buildLineChart(ctx, latestHour, urlToName)
+
 	resp := DistributionResponse{
 		TotalBackendCount:     total,
 		OnlineBackendCount:    online,
@@ -219,24 +242,61 @@ func (a *Admin) webappGetDistribution(w http.ResponseWriter, r *http.Request) {
 		AvgQueryCountSecond:   avgPerSecond,
 		StartTime:             a.cfg.StartTime.UTC().Format("2006-01-02T15:04:05.000Z"),
 		DistributionChart:     chart,
-		LineChart:             map[string][]TimePoint{},
+		LineChart:             lineChart,
 	}
 	writeJSON(w, http.StatusOK, resultOK(resp))
+}
+
+// buildLineChart returns the per-backend, per-minute query-count series for the
+// last latestHour hours, keyed by backend name (matching Java's lineChartMap).
+// On a query error it returns an empty map so the dashboard still renders.
+func (a *Admin) buildLineChart(ctx context.Context, latestHour int, urlToName map[string]string) map[string][]TimePoint {
+	since := time.Now().UTC().Add(-time.Duration(latestHour) * time.Hour)
+	buckets, err := a.cfg.History.FindDistribution(ctx, since)
+	if err != nil {
+		a.cfg.Log.Error("admin: webapp get distribution: line chart", "err", err)
+		return map[string][]TimePoint{}
+	}
+
+	lineChart := make(map[string][]TimePoint)
+	for _, b := range buckets {
+		name, ok := urlToName[b.BackendURL]
+		if !ok {
+			// Skip rows for backends that no longer exist; the UI keys by name.
+			continue
+		}
+		lineChart[name] = append(lineChart[name], TimePoint{
+			EpochMillis: b.MinuteStart.UnixMilli(),
+			BackendURL:  b.BackendURL,
+			Name:        name,
+			QueryCount:  b.QueryCount,
+		})
+	}
+	return lineChart
 }
 
 // webappGetUIConfig returns the UI configuration.
 // POST /webapp/getUIConfiguration
 func (a *Admin) webappGetUIConfig(w http.ResponseWriter, r *http.Request) {
+	disablePages := a.cfg.DisablePages
+	if disablePages == nil {
+		disablePages = []string{}
+	}
 	cfg := UIConfiguration{
-		AuthType: a.cfg.Auth.Type,
+		AuthType:     a.cfg.Auth.Type,
+		DisablePages: disablePages,
 	}
 	writeJSON(w, http.StatusOK, resultOK(cfg))
 }
 
-// webappGetRoutingRules returns routing rules (v1: always empty list).
+// webappGetRoutingRules signals that routing rules are managed externally.
+// The Go gateway only supports EXTERNAL routing (the external service owns the
+// rules), so it returns 204 No Content — the same signal the Java gateway sends
+// for EXTERNAL rule type. The web UI reads 204 as "external routing in use" and
+// hides the routing-rules editor.
 // POST /webapp/getRoutingRules
 func (a *Admin) webappGetRoutingRules(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, resultOK([]RoutingRule{}))
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // webappUpdateRoutingRules updates routing rules (v1: not fully implemented).

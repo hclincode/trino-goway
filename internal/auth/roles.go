@@ -3,6 +3,7 @@ package auth
 import (
 	"net/http"
 	"regexp"
+	"strings"
 
 	"github.com/hclincode/trino-goway/internal/config"
 )
@@ -40,6 +41,38 @@ func HasRole(principal *Principal, role string, cfg config.AuthorizationConfig) 
 		return false
 	}
 	return matched
+}
+
+// ResolvePagePermissions returns the union of UI page keys the given roles may
+// see, derived from the role→"page1_page2" map. It mirrors Java's
+// processPagePermissions: if any role has no entry, it returns an empty slice,
+// which the UI treats as "no page restriction". The result is deduplicated and
+// preserves first-seen order; it is always non-nil.
+func ResolvePagePermissions(roles []string, pagePermissions map[string]string) []string {
+	out := []string{}
+	if len(roles) == 0 || len(pagePermissions) == 0 {
+		return out
+	}
+	for _, role := range roles {
+		if _, ok := pagePermissions[role]; !ok {
+			// An unrestricted role short-circuits to "all pages allowed".
+			return []string{}
+		}
+	}
+	seen := make(map[string]struct{})
+	for _, role := range roles {
+		for _, page := range strings.Split(pagePermissions[role], "_") {
+			if page == "" {
+				continue
+			}
+			if _, dup := seen[page]; dup {
+				continue
+			}
+			seen[page] = struct{}{}
+			out = append(out, page)
+		}
+	}
+	return out
 }
 
 // RequireRole returns a middleware that rejects requests where the authenticated principal

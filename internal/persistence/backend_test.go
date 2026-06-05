@@ -48,6 +48,7 @@ func runBackendSuite(t *testing.T, db *sqlx.DB) {
 		b := persistence.Backend{
 			Name:         "cluster-a",
 			URL:          "http://a.example:8080",
+			ExternalURL:  "https://a.example:443",
 			RoutingGroup: "adhoc",
 			Active:       true,
 			CreatedAt:    now,
@@ -60,11 +61,13 @@ func runBackendSuite(t *testing.T, db *sqlx.DB) {
 		require.Len(t, got, 1)
 		assert.Equal(t, "cluster-a", got[0].Name)
 		assert.Equal(t, "http://a.example:8080", got[0].URL)
+		assert.Equal(t, "https://a.example:443", got[0].ExternalURL)
 		assert.Equal(t, "adhoc", got[0].RoutingGroup)
 		assert.True(t, got[0].Active)
 
-		// Re-upsert with new URL/routing group.
+		// Re-upsert with new URL/external URL/routing group.
 		b.URL = "http://a-new.example:8080"
+		b.ExternalURL = "https://a-new.example:443"
 		b.RoutingGroup = "etl"
 		b.UpdatedAt = now.Add(time.Minute)
 		require.NoError(t, dao.Upsert(ctx, b))
@@ -73,6 +76,7 @@ func runBackendSuite(t *testing.T, db *sqlx.DB) {
 		require.NoError(t, err)
 		require.Len(t, got, 1, "upsert must not create a duplicate row")
 		assert.Equal(t, "http://a-new.example:8080", got[0].URL)
+		assert.Equal(t, "https://a-new.example:443", got[0].ExternalURL)
 		assert.Equal(t, "etl", got[0].RoutingGroup)
 	})
 
@@ -130,6 +134,29 @@ func runBackendSuite(t *testing.T, db *sqlx.DB) {
 		got, err = dao.List(ctx)
 		require.NoError(t, err)
 		assert.True(t, got[0].Active)
+	})
+
+	t.Run("LookupExternalURL resolves and falls back", func(t *testing.T) {
+		resetBackends(t, db)
+		seedBackends(t, dao,
+			persistence.Backend{Name: "with-ext", URL: "http://be1:8080", ExternalURL: "https://be1.example:443", Active: true},
+			persistence.Backend{Name: "no-ext", URL: "http://be2:8080", Active: true},
+		)
+
+		// Explicit external_url is returned.
+		got, err := dao.LookupExternalURL(ctx, "http://be1:8080")
+		require.NoError(t, err)
+		assert.Equal(t, "https://be1.example:443", got)
+
+		// Empty external_url falls back to the backend URL.
+		got, err = dao.LookupExternalURL(ctx, "http://be2:8080")
+		require.NoError(t, err)
+		assert.Equal(t, "http://be2:8080", got)
+
+		// Unknown backend URL falls back to the given URL.
+		got, err = dao.LookupExternalURL(ctx, "http://unknown:8080")
+		require.NoError(t, err)
+		assert.Equal(t, "http://unknown:8080", got)
 	})
 
 	t.Run("ListActive filters out inactive backends", func(t *testing.T) {
