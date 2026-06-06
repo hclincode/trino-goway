@@ -646,3 +646,190 @@ The standalone external router now exists at `routing-service/` (Go gRPC; plugga
 
 - [x] For an equivalent rule, the same request through `cmd/mock-external-router-grpc` and the real `routing-service` yields the identical `routingGroup` — confirms the gateway treats any conformant `TrinoGatewayRouter` interchangeably — `internal/e2e/router_parity_e2e_test.go` (`TestE2E_RouterParity_MockVsRealService`): `X-Trino-Source=airflow` → `etl` via both the fixed-group mock (`--group etl`) and the real service's `airflow→etl` expr rule. New harness launcher `internal/e2e/harness/mock_router.go` (`StartMockGRPCRouter`; `TRINO_GOWAY_MOCK_ROUTER_BIN` override)
 - [x] `go vet ./...` + `go vet -tags e2e ./internal/e2e/...` pass; new test + launcher are golangci-lint clean
+
+---
+
+## Phase 12: Live cluster stats (UC-MON-02) + public backend-state wire shape (M7 / UC-ADM-14)
+
+UC-MON-02 makes the gateway report **live queued/running query counts** (plus worker-node count and a per-user queued breakdown) per backend, instead of the hardcoded zeros `internal/admin` serves today (`BackendResponse.Queued`/`Running` at `internal/admin/backend.go`). The Java gateway gates this behind a **config-selectable cluster-stats monitor** (`ClusterStatsMonitorType`); trino-goway ports the same selection with default **INFO_API**.
+
+**The INFO_API-default reframing (verified against the Java submodule).** Java's `getClusterStatsMonitor` (`module/HaGatewayProviderModule.java:179-197`) returns `ClusterStatsInfoApiMonitor` whenever `clusterStatsConfiguration` is absent, and that monitor sets only `trinoStatus` from `/v1/info` — `runningQueryCount`/`queuedQueryCount`/`numWorkerNodes` stay 0 and `userQueuedCount` stays null. **trino-goway's current "always 0" is therefore byte-for-byte identical to Java's default**, not a defect. Live counts appear in Java only under `UI_API`, `METRICS`, `JDBC`, or `JMX`. So Phase 12 is *additive*: it introduces a selectable monitor so operators who configure `UI_API`/`METRICS` get real counts, while the default path is unchanged.
+
+**M7 coupling.** Gap M7 / UC-ADM-14 is that the public backend-state endpoint (`GET /api/public/backends/{name}/state`, `internal/admin/backend.go:151`) returns `BackendResponse` rather than Java's `ClusterStats` wire shape (`{clusterId, runningQueryCount, queuedQueryCount, numWorkerNodes, trinoStatus, proxyTo, externalUrl, routingGroup, userQueuedCount}`). Closing M7 *requires* the internal `ClusterStats` model and the stats store this phase introduces, so the two are delivered together. The webapp `getAllBackends` counts (`internal/admin/webapp.go`) are surfaced from the same store. Note: `getAllBackends` keeps its own `BackendResponse` shape (the UI table DTO) — only its Queued/Running become live; the public-state endpoint switches to the full `ClusterStats` record.
+
+**Guiding principles.** Faithful-to-Java field names on the wire (`clusterId`, `numWorkerNodes`, `userQueuedCount`, …); **default INFO_API = current behavior, byte-for-byte** (no new outbound calls, counts 0); nil-safe observer/store extension (a nil collector or nil store is a no-op, gateway boots exactly as today); no global state — explicit constructor wiring (consistent with Hard Invariant #12 and the Phase 9 metrics registry).
+
+### Design rulings (binding on all Phase 12 tasks)
+
+- **R1 — Collectors live in a new `internal/clusterstats` package**, not `internal/monitor`. The health monitor keeps its single concern (binary `/v1/info` verdict, lock-free hot-path read). Stats collection (UI form-login + two UI calls; OpenMetrics scrape + threshold gating) is a distinct, config-selected concern. The collector **rides the existing monitor tick** (no second scheduler), mirroring Java's one `ActiveClusterMonitor` fanning out to both health and stats observers.
+- **R2 — Collector interface + impls.** `Collector.Collect(ctx, b Backend) ClusterStats`; `Backend` = {`GetName`, `GetURL`(proxyTo), `GetExternalURL`, `GetRoutingGroup`}. Impls one file each: `infoapi.go` (default; sets `TrinoStatus` only by **reusing the monitor's health verdict** — issues NO extra HTTP), `uiapi.go`, `metrics.go`, `noop.go`. Selector `NewCollector(...)`.
+- **R3 — Counts flow collector → `StatsStore` → admin.** Monitor gains a nil-safe `ClusterStatsCollector` hook + `StatsObserver` (write side, drives `Collect` in the existing per-backend fan-out and publishes one name-keyed snapshot per tick). Admin reads via a new consumer-owned `StatsProvider.Stats(name) clusterstats.ClusterStats` added to `admin.Config` (optional, nil ⇒ counts 0). `StatsStore` = `atomic.Pointer[map[string]ClusterStats]` keyed by backend **name** (matches Java `BackendStateManager` keyed by `clusterId`), single swap per tick, implements both write and read sides. Import direction is one-way: `monitor → clusterstats`; `clusterstats` must NOT import `monitor`.
+- **R4 — Internal model + M7 wire type.** Internal `clusterstats.ClusterStats{ClusterID, RunningQueryCount, QueuedQueryCount, NumWorkerNodes, TrinoStatus, ProxyTo, ExternalURL, RoutingGroup, UserQueuedCount map[string]int}`. M7 wire type `admin.ClusterStatsResponse` with JSON tags exactly `clusterId, runningQueryCount, queuedQueryCount, numWorkerNodes, trinoStatus, proxyTo, externalUrl, routingGroup, userQueuedCount`. Per type: INFO_API → counts 0; UI_API → all live (incl. userQueuedCount); METRICS → counts + status live (no numWorkerNodes/userQueuedCount); NOOP → zero/UNKNOWN.
+- **R5 — Connection isolation (Hard Invariant #12).** A dedicated 4th HTTP client `statsClient` (distinct timeout/auth/cookie profile), constructed **only** when `monitorType ∈ {UI_API, METRICS}` (INFO_API/NOOP reuse the monitor verdict and issue no stats HTTP). UI_API cookie jar lives inside the collector, not on the shared transport. Document in the Hard Invariant #12 ledger.
+- **R6 — Config.** New `clusterStats:{monitorType}` + `backendState:{username,password,ssl,xForwardedProtoHeader}` nodes, plus `monitor:` stats knobs (`statsTimeout` 10s, `retries` 0, `metricsEndpoint` `/metrics`, `runningQueriesMetricName`, `queuedQueriesMetricName`, `metricMinimumValues` `{trino_metadata_name_DiscoveryNodeManager_ActiveNodeCount:1}`, `metricMaximumValues` `{}`). Default `monitorType` = INFO_API.
+- **R7 — Hard Invariants + readiness.** Readiness/first-tick UNCHANGED — the health probe drives readyz; stats collection rides the same tick but must never gate readiness or abort it. The store returns a zero `ClusterStats{ClusterID:name}` for not-yet-collected backends, never an error.
+- **R8 — Scope: JDBC/JMX deferred** (heavier than the HTTP-shaped UI_API/METRICS; narrow operator base). `Validate()` rejects them with an explicit "not supported in v1" error; the selector switch handles only NOOP/INFO_API/UI_API/METRICS. **Lead ruling:** this is **gap-closure** (health monitoring + backend registry are already locked-in SCOPE §1; M7 is an explicit UC-ADM-14 gap), so it does **not** require SCOPE §5 sign-off — a §2 deferred-JDBC/JMX note + the M7 gap-closure note suffice.
+
+### Implementation choices (go-implementer, binding)
+
+- **(a) TrinoStatus placement — shared leaf enum package `internal/clusterstatus`.** Holds `Status` + labels + the NEW `UNKNOWN` member, imported by both `monitor` and `clusterstats`; `monitor.TrinoStatus` becomes a thin alias so existing consumers (`admin.trinoStatusLabel`, monitor internals) compile with minimal churn. No internal deps (satisfies the one-way import rule).
+- **(b) Unobserved-default object — populated from persistence (diverges from Java's null).** The store returns zero counts for not-yet-collected backends; at the M7 admin boundary the handler fills `proxyTo`/`externalUrl`/`routingGroup` from the persistence row (reusing `externalURLOrProxyTo`) rather than emitting Java's raw null — matching the existing Go convention (`proxyBackendFromPersistence` already populates `externalUrl` where Java leaves it null). `userQueuedCount` stays null until UI_API collects it; counts 0. Divergence documented in Task 86/87.
+
+Critical path: **75 → 76 → 77 → 78 → 79 → 80** (config → pkg → collectors → monitor hook → admin → composition root). Test fixtures **81** unblock unit/E2E **82–85**; docs **86–87** land last. The authoritative Java contract for this phase is captured by the java-analyst (ClusterStats record JSON, UI_API `/ui/login`+`/ui/api/stats`+`/ui/api/query?state=QUEUED` shapes, METRICS OpenMetrics parse + threshold gating, config defaults + the `backendState`-required validation rule).
+
+### Task 75 — Config: `clusterStats` + `backendState` nodes + `monitor` stats knobs
+
+Goal: add the M7/UC-MON-02 config surface to `internal/config` with Java-value defaults and v1-deferred validation. Deps: none (foundation for 76–80).
+
+- [ ] `internal/config/config.go` — new `ClusterStatsConfig{ MonitorType string }` (`yaml:"monitorType"`); top-level node `clusterStats:` wired as `Config.ClusterStats`
+- [ ] `internal/config/config.go` — new `BackendStateConfig{ Username, Password string; SSL bool; XForwardedProtoHeader bool }` (`yaml:"username"/"password"/"ssl"/"xForwardedProtoHeader"`); top-level node `backendState:` wired as `Config.BackendState`
+- [ ] `internal/config/config.go` — extend `MonitorConfig` with `StatsTimeout Duration`, `Retries int`, `MetricsEndpoint string`, `RunningQueriesMetricName string`, `QueuedQueriesMetricName string`, `MetricMinimumValues map[string]float64`, `MetricMaximumValues map[string]float64` (matching yaml keys)
+- [ ] `internal/config/config.go::defaultConfig`/`applyDefaults` — seed: `MonitorType→INFO_API`; `StatsTimeout→10s` (Java queryTimeout), `Retries→0`, `MetricsEndpoint→/metrics`, `RunningQueriesMetricName→trino_execution_name_QueryManager_RunningQueries`, `QueuedQueriesMetricName→trino_execution_name_QueryManager_QueuedQueries`, `MetricMinimumValues→{trino_metadata_name_DiscoveryNodeManager_ActiveNodeCount:1}` (when omitted — NOT empty), `MetricMaximumValues→{}`
+- [ ] `internal/config/config.go::Validate` — accept `monitorType ∈ {NOOP, INFO_API, UI_API, METRICS}`; reject `JDBC`/`JMX` with `config: validate: clusterStats.monitorType %q not supported in v1` (R8); require non-empty `backendState.username` when `monitorType ∈ {UI_API, METRICS}`; validate `statsTimeout > 0`, `retries >= 0`
+- [ ] `internal/config/config_test.go` — table-driven: YAML round-trip; defaults applied when omitted (esp. metric names + min-values map); JDBC/JMX rejected; UI_API/METRICS without `backendState.username` rejected; INFO_API + empty backendState accepted
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+
+### Task 76 — `internal/clusterstatus` leaf enum + `internal/clusterstats` model + store + collector interface
+
+Goal: introduce the shared status enum (choice a), the internal `ClusterStats` model, the name-keyed `StatsStore` (write+read sides), and the `Collector`/`Backend` interfaces — enforcing the one-way import direction. Deps: 75.
+
+- [ ] `internal/clusterstatus/doc.go` + `status.go` — `Status int` with members `Unknown, Healthy, Unhealthy, Pending`; `Label() string` → `"HEALTHY"|"UNHEALTHY"|"PENDING"|"UNKNOWN"` (admin wire form) + lowercase `String()` for logs; NO internal imports
+- [ ] `internal/monitor/status.go` — replace the local enum with aliases: `type TrinoStatus = clusterstatus.Status` and `StatusUnknown/Healthy/Unhealthy/Pending` consts → `clusterstatus.*` so `internal/monitor` + all `monitor.Status*` consumers (admin) compile unchanged
+- [ ] `internal/clusterstats/doc.go` + `stats.go` — `ClusterStats{ClusterID, RunningQueryCount, QueuedQueryCount, NumWorkerNodes int; TrinoStatus clusterstatus.Status; ProxyTo, ExternalURL, RoutingGroup string; UserQueuedCount map[string]int}`
+- [ ] `internal/clusterstats/collector.go` — `Backend` interface ({GetName, GetURL, GetExternalURL, GetRoutingGroup}); `Collector` interface (`Collect(ctx, b Backend) ClusterStats`); `NewCollector(cfg config.ClusterStatsConfig, mon config.MonitorConfig, bs config.BackendStateConfig, monitorStatus func(url string) clusterstatus.Status, httpClient *http.Client, log *slog.Logger) (Collector, error)` — selector switch over `NOOP|INFO_API|UI_API|METRICS`, default INFO_API, any other (incl. JDBC/JMX) → error (defense-in-depth)
+- [ ] `internal/clusterstats/store.go` — `StatsStore` (`atomic.Pointer[map[string]ClusterStats]` keyed by NAME); `ObserveStats(map[string]ClusterStats)` (write, single swap) + `Stats(name string) ClusterStats` (read; zero `ClusterStats{ClusterID:name}` for unknown, never error — R7). Top-of-file comment: clusterstats must NOT import monitor (one-way)
+- [ ] `internal/clusterstats/store_test.go` + `internal/clusterstatus/status_test.go` — not-yet-collected → zero stats w/ ClusterID; observe→read round-trip; race-clean concurrent readers during swap; name-keying (not URL); `Label()`/`String()` for every member incl. UNKNOWN
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+
+### Task 77 — Collectors: NOOP, INFO_API, UI_API, METRICS
+
+Goal: implement the four `Collector` impls, one file each, matching the Java behavioral contract. Deps: 76.
+
+- [ ] `internal/clusterstats/noop.go` — `Collect` returns `ClusterStats{ClusterID, ProxyTo, ExternalURL, RoutingGroup from b, TrinoStatus: monitorStatus(b.GetURL())}`; no HTTP; counts 0
+- [ ] `internal/clusterstats/infoapi.go` (DEFAULT) — `TrinoStatus` ONLY, reusing the monitor verdict via `monitorStatus(url)` — issues NO extra HTTP; ProxyTo/ExternalURL/RoutingGroup from `b`; counts 0
+- [ ] `internal/clusterstats/uiapi.go` — per-collector `http.CookieJar` inside the collector (R5); `POST {proxyTo}/ui/login` form `username`+`password` (one session reused across ticks — documented optimization over Java's fresh-login-per-GET); `GET /ui/api/stats` → `activeWorkers`(→NumWorkerNodes), `queuedQueries`, `runningQueries`; `TrinoStatus = activeWorkers>0 ? Healthy : Unhealthy`; `GET /ui/api/query?state=QUEUED` → tally `sessionUser` into `UserQueuedCount`; `xForwardedProtoHeader` adds `X-Forwarded-Proto: https` on the TWO GETs (not login); 401/empty → partial, no counts, no panic
+- [ ] `internal/clusterstats/metrics.go` — per required metric `GET {proxyTo}{metricsEndpoint}?name[]=<metric>`; auth `Authorization: Basic base64(user:pass)` if password else `X-Trino-User: <username>`; `Content-Type: application/openmetrics-text; version=1.0.0; charset=utf-8`; parse (split `\n`, drop `#`, `SplitN(line," ",2)`, parseFloat→int truncation); any required metric absent → UNHEALTHY; gating: empty/min-absent-or-below/max-absent-or-above → UNHEALTHY else HEALTHY; no NumWorkerNodes/UserQueuedCount
+- [ ] `internal/clusterstats/{uiapi,metrics}.go` — honor `Monitor.StatsTimeout` (`context.WithTimeout`) + `Monitor.Retries` (retry GET on transport error; backoff via `select`+`ctx.Done`, no `time.Sleep`)
+- [ ] tests `infoapi_test.go`, `noop_test.go`, `uiapi_test.go`, `metrics_test.go` — status from injected verdict + zero-HTTP assertion (recording client); UI login/stats/per-user tally/xForwardedProto/401-partial/activeWorkers==0; METRICS truncation/missing-metric/min-max gating/auth-header selection (see Task 82 for the full matrix)
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+
+### Task 78 — Monitor stats hook + `StatsObserver` wiring (+ INFO_API `starting→PENDING` fix)
+
+Goal: ride the existing tick to drive a nil-safe collector and publish a per-tick stats snapshot, without touching readiness. Deps: 76 (77 for a real collector; the hook is nil-safe so it can land first).
+
+- [ ] `internal/monitor/monitor.go` — `StatsObserver` interface (`ObserveStats(map[string]clusterstats.ClusterStats)`, nil-safe like `StatusObserver`). This is the one place `monitor` imports `clusterstats` (one-way)
+- [ ] `internal/monitor/monitor.go` — `ClusterStatsCollector` field (`clusterstats.Collector`, nil-safe) + `statsObserver`; setters `SetClusterStatsCollector`/`SetStatsObserver` (call before Start, mirroring `SetObserver`)
+- [ ] `internal/monitor/monitor.go::probe` — after the health swap + `notifyObserver()`, when collector + statsObserver non-nil, build a name-keyed snapshot via `collector.Collect(probeCtx, b)` per backend reusing the SAME per-backend fan-out (no second scheduler, R1); hand one map to `statsObserver.ObserveStats(...)`
+- [ ] `internal/monitor/monitor.go` — extend `Backend` interface with `GetExternalURL()`/`GetRoutingGroup()`; extend `SimpleBackend` with `ExternalURL`/`RoutingGroup` fields + getters (so the monitor backend satisfies `clusterstats.Backend`)
+- [ ] `internal/monitor/monitor.go::checkOne` — FIX: `info.Starting==true → StatusPending` (currently `StatusUnhealthy` at ~`:315-317`; Java maps `starting→PENDING`); update the doc comment
+- [ ] `internal/monitor/monitor.go` — readiness/first-tick UNCHANGED: stats must never gate readiness or abort the tick (R7)
+- [ ] `internal/monitor/monitor_test.go` — collector called once per backend per tick; `ObserveStats` receives a name-keyed snapshot; nil collector/observer → no panic, no stats call; `starting==true` now PENDING (update assertion); readiness still flips on first tick regardless of stats; goleak clean
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+
+### Task 79 — Admin: `getAllBackends` counts + M7 `ClusterStatsResponse` public-state + `UNKNOWN` label
+
+Goal: surface live counts in `BackendResponse` and add the M7 9-field record; wire a consumer-owned `StatsProvider`. Deps: 76 (model + store read side); benefits from 78 but compiles against the interface alone.
+
+- [ ] `internal/admin/router.go` — `StatsProvider{ Stats(name string) clusterstats.ClusterStats }`; add optional `Stats StatsProvider` to `admin.Config` (nil ⇒ counts 0)
+- [ ] `internal/admin/backend.go::trinoStatusLabel` — delegate to `clusterstatus.Status.Label()` (emits `"UNKNOWN"`); the `default` case must no longer collapse Unknown→PENDING
+- [ ] `internal/admin/backend.go::backendResponseFromPersistence` — populate `Queued`/`Running` from `a.cfg.Stats.Stats(b.Name)` when `Stats != nil` (lookup by NAME); 0 when nil; keep `Status` from `Monitor.Status(b.URL)`
+- [ ] `internal/admin/backend.go` — new wire type `ClusterStatsResponse` (JSON tags `clusterId, runningQueryCount, queuedQueryCount, numWorkerNodes, trinoStatus, proxyTo, externalUrl, routingGroup, userQueuedCount`; `userQueuedCount` `,omitempty` so uncollected default emits null/absent) + mapper `clusterStatsResponseFromPersistence(b, cs)`: `clusterId=b.Name`; counts/numWorkerNodes/userQueuedCount from `cs`; `trinoStatus` from `Monitor.Status(b.URL)` label; proxyTo/externalUrl/routingGroup POPULATED FROM PERSISTENCE (choice b)
+- [ ] `internal/admin/backend.go::getPublicBackendState` — emit `ClusterStatsResponse` (M7) instead of `BackendResponse`; nil `Stats` ⇒ zero `ClusterStats{ClusterID:name}` (counts 0, persistence fields still populated); 404 on missing name (unchanged)
+- [ ] `internal/admin/webapp.go::webappGetAllBackends` — call site unchanged; verify Queued/Running are no longer hardcoded 0 (flow from the store)
+- [ ] `internal/admin/backend_test.go`/`webapp_test.go` — getAllBackends live counts from a fake StatsProvider keyed by name; nil ⇒ 0; `getPublicBackendState` 9 fields exact tags (golden `testdata/cluster_stats_response.golden`); UNKNOWN → `trinoStatus:"UNKNOWN"`; unobserved default → populated proxyTo/externalUrl/routingGroup, null userQueuedCount, 0 counts
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+
+### Task 80 — Composition root: `statsClient` + collector/store wiring (Hard Invariant #12 ledger)
+
+Goal: build the 4th HTTP client and the collector→store→monitor/admin wiring, only when needed. Deps: 76, 77, 78, 79.
+
+- [ ] `cmd/trino-goway/main.go` — 4th `*http.Client` `statsClient` (timeout `Monitor.StatsTimeout`; `CheckRedirect: ErrUseLastResponse`; cookie jar NOT here — lives in the collector per R5); construct ONLY when `ClusterStats.MonitorType ∈ {UI_API, METRICS}`
+- [ ] `cmd/trino-goway/main.go` — update the "three distinct clients" comment/ledger to FOUR; add `statsClient` (conditionally constructed) to the Hard Invariant #12 ledger
+- [ ] `cmd/trino-goway/main.go` — `statsStore := clusterstats.NewStatsStore()`; `collector, err := clusterstats.NewCollector(cfg.ClusterStats, cfg.Monitor, cfg.BackendState, mon.Status, statsClient, log...)` (pass `mon.Status` so INFO_API/NOOP reuse the verdict); wrap error
+- [ ] `cmd/trino-goway/main.go` — `mon.SetClusterStatsCollector(collector)` + `mon.SetStatsObserver(statsStore)` before `mon.Start`; pass `Stats: statsStore` into `admin.New(...)`
+- [ ] `cmd/trino-goway/main.go::refreshBackends` — populate `SimpleBackend.ExternalURL`/`RoutingGroup` from persistence so collectors get a fully-populated `clusterstats.Backend`
+- [ ] `cmd/trino-goway/main.go` — compile-time assertions: `_ monitor.StatsObserver = (*clusterstats.StatsStore)(nil)`, `_ admin.StatsProvider = (*clusterstats.StatsStore)(nil)`
+- [ ] `go build ./cmd/trino-goway` produces a binary; startup log gains `clusterStatsMonitor = cfg.ClusterStats.MonitorType`
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+
+### Task 81 — Test fixtures: extend `TrinoFake` with the cluster-stats surfaces
+
+Extends `internal/testutil/trino_fake.go` to emulate UI login + UI stats/query APIs + the OpenMetrics endpoint. New fields default to "no stats" so every existing caller is unaffected (INFO_API parity). Deps: none (start early; unblocks 82, 84).
+
+- [ ] `internal/testutil/trino_fake.go` — UI_API: `POST /ui/login` (form creds → `Set-Cookie: Trino-UI-Token=...; HttpOnly; Path=/`, record login; wrong/empty → 403); `GET /ui/api/stats` (require cookie else 401; JSON `{activeWorkers, runningQueries, queuedQueries}`; record `X-Forwarded-Proto`); `GET /ui/api/query?state=QUEUED` (require cookie; JSON array of `{queryId, sessionUser, state}`)
+- [ ] `internal/testutil/trino_fake.go` — METRICS: `GET /metrics` (configurable path; require Basic or `X-Trino-User`, record which; return configurable OpenMetrics body verbatim)
+- [ ] `internal/testutil/trino_fake.go` — setters/assertions: `SetUICredentials`, `SetUIStats(activeWorkers,running,queued)`, `SetQueuedQueries(map[string]int)`, `SetMetrics(body)`, `SetMetricsPath`, `LoginCount`, `UIStatsHits`/`UIQueryHits`/`MetricsHits`, `LastForwardedProto`, `LastMetricsAuth() (basicUser, trinoUser string)`
+- [ ] `internal/testutil/trino_fake_test.go` — `TestTrinoFake_UILogin_SetsCookie`, `_UIStats_RequiresCookie`, `_UIQuery_PerUserQueued`, `_Metrics_AuthHeaderRecorded`, `_Metrics_BodyVerbatim`, `_DefaultsAreInert`
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+
+### Task 82 — Unit tests: collectors + enum + store
+
+One file per collector; uses `httptest`/`TrinoFake`. Deps: 77, 81.
+
+- [ ] `internal/clusterstatus/status_test.go` — `TestStatus_StringRoundTrip` (HEALTHY|UNHEALTHY|PENDING|UNKNOWN; UNKNOWN is the zero value)
+- [ ] `internal/clusterstats/collector_infoapi_test.go` — `TestInfoAPICollector_StartingMapsToPending` (FIXES starting→UNHEALTHY), `_RunningMapsToHealthy`, `_TransportError_Unhealthy`, `_ZeroCountParity`
+- [ ] `internal/clusterstats/collector_uiapi_test.go` — `_LoginThenStats`, `_ActiveWorkersZero_Unhealthy`, `_PerUserQueuedTally`, `_LoginFailed_NoCounts`, `_EmptyStats_NoCounts`, `_XForwardedProtoHeader`, `_CookieReusedAcrossCalls` (LoginCount==1)
+- [ ] `internal/clusterstats/collector_metrics_test.go` — `_ParsesOpenMetrics` (truncation 3.9→3), `_MinimumGate_Unhealthy`, `_MaximumGate_Unhealthy`, `_HealthyWhenThresholdsMet` (no numWorkerNodes/userQueuedCount), `_AuthHeaderSelection` (Basic vs X-Trino-User), `_DefaultMinimums`
+- [ ] `internal/clusterstats/collector_noop_test.go` — `_NeverProbes` (zero/UNKNOWN, all fake hit counters 0)
+- [ ] `internal/clusterstats/store_test.go` — `_KeyedByName`, `_UnobservedDefaultFromPersistence` (proxyTo/externalUrl/routingGroup set, counts 0, status UNKNOWN, userQueuedCount nil — choice b), `_ConcurrentReadWrite` (`-race`)
+- [ ] `internal/clusterstats/factory_test.go` — `TestNewCollector_SelectsByType` (NOOP/INFO_API/UI_API/METRICS → right concrete type; UNSET → INFO_API)
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+
+### Task 83 — Unit tests: config validation for `clusterStats`
+
+Deps: 75.
+
+- [ ] `internal/config/config_test.go` (or `clusterstats_validation_test.go`) — `TestConfig_ClusterStats_DefaultsToInfoAPI`; `_BackendStateRequired` (UI_API/METRICS without backendState → error; optional for INFO_API/NOOP); `_RejectsJDBC`/`_RejectsJMX` ("not supported in v1"); `_MetricNameDefaults` (min-values `{...ActiveNodeCount:1}`, endpoint `/metrics`); `_UnknownType` → error
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+
+### Task 84 — E2E: live cluster stats through public + webapp endpoints
+
+`//go:build e2e`, `internal/e2e/`, `Harness`. Needs a config-time harness option (collector type is read at subprocess startup; default ⇒ INFO_API, preserving every existing e2e test). Deps: 80, 81.
+
+- [ ] `internal/e2e/harness/harness.go` — `WithClusterStats(monitorType, backendState, backendPassword string)` Option writing a `clusterStats:`+`backendState:` block (+ METRICS endpoint/threshold defaults) into the temp YAML; ensure `AddBackend` exposes the `*TrinoFake` so tests call `SetUIStats`/`SetQueuedQueries`/`SetMetrics`
+- [ ] `internal/e2e/cluster_stats_e2e_test.go`:
+  - `TestE2E_ClusterStats_InfoAPI_PublicStateShape` — default INFO_API; `GET /api/public/backends/{name}/state` returns the `ClusterStatsResponse` 9-field shape (NOT `BackendResponse`); counts 0; `trinoStatus HEALTHY` (M7 + zero-count parity)
+  - `TestE2E_ClusterStats_InfoAPI_GetAllBackendsZeroCounts` — `POST /webapp/getAllBackends` Queued/Running 0
+  - `TestE2E_ClusterStats_InfoAPI_StartingIsPending` — `SetStarting(true)` ⇒ public state `trinoStatus==PENDING`
+  - `TestE2E_ClusterStats_UnobservedDefaultFromPersistence` — query public state before first collection ⇒ proxyTo/externalUrl/routingGroup populated, counts 0, trinoStatus UNKNOWN/PENDING, userQueuedCount null, never 500 (choice b)
+  - `TestE2E_ClusterStats_UIAPI_LiveCountsSurface` — `WithClusterStats("UI_API","admin","")`; `SetUIStats(3,5,2)`+`SetQueuedQueries({alice:2})`; both `.../state` (running 5, queued 2, numWorkerNodes 3, userQueuedCount.alice 2) and `getAllBackends` (Queued 2, Running 5) reflect live numbers
+  - `TestE2E_ClusterStats_Metrics_CountsAndThreshold` — `WithClusterStats("METRICS","svc","pw")`; ActiveNodeCount 4 + running/queued ⇒ HEALTHY w/ counts; drop below minimum ⇒ next tick UNHEALTHY + counts zeroed
+  - `TestE2E_ClusterStats_ReadyzNotGatedByStats` (Hard Invariant #12) — stats surface always failing; `/trino-gateway/readyz` still reaches 200 after first health probe (cross-reference into `hard_invariants_e2e_test.go` if preferred over a standalone test)
+- [ ] `goleak` clean (`VerifyTestMain`)
+- [ ] `go vet -tags e2e ./internal/e2e/...` pass
+
+### Task 85 — Diff-harness parity: public backend-state `ClusterStats` Java↔Go
+
+One new scenario; per-entry `# [JUSTIFIED]` enforced by `scenarios_validation_test.go`. The Java fixture must configure a stats monitor or both sides read 0. Deps: 84 green (riskiest — Java `clusterStatsConfiguration` must actually emit counts).
+
+- [ ] `cmd/goway-diff-harness/testdata/scenarios/public-backend-state-clusterstats.yaml` — register backend via `POST /entity`, then `GET /api/public/backends/{name}/state`; assert **shape + field-name equivalence** (`trinoStatus, queuedQueryCount, runningQueryCount, numWorkerNodes, userQueuedCount`), NOT live integer values; `rewriteHostPort: true`. `diff.ignoreBodyFields` each with inline `# [JUSTIFIED]`: `queuedQueryCount`/`runningQueryCount` (live per-run counts on independent fleets), `numWorkerNodes` (shared cluster worker count), `userQueuedCount` (live session-user membership), `clusterId` (backend name/instance differs per fleet)
+- [ ] `internal/diffharness/bootstrap.go` (+ `testdata/java-gateway-config.yaml.tmpl`) — configure the Java gateway `clusterStatsConfiguration.monitorType` (INFO_API or UI_API) so Java populates `ClusterStats`; note in the scenario header
+- [ ] `cmd/goway-diff-harness/live_test.go` (`//go:build diff`) — scenario auto-picked-up; if Go-only fields diverge add to `liveExcludedScenarios` with a documented unit-only rationale (mirroring `query-history-scoping`)
+- [ ] Every `diff.ignore*` carries inline `# [JUSTIFIED]`; passes `TestCommittedScenarios_LoadAndJustified`
+- [ ] `go vet ./...` + `go vet -tags diff ./...` pass; `golangci-lint run ./internal/diffharness/... ./cmd/goway-diff-harness/...` = 0 issues
+
+### Task 86 — Docs / config.example / SCOPE / PRD reconciliation
+
+Goal: document the new config surface, the M7 gap-closure, and the two divergence choices. (Use-case-doc checkbox flips are Task 87.) Deps: 75–80.
+
+- [ ] `configs/config.example.yaml` — documented `clusterStats:` (`monitorType: INFO_API` + commented UI_API/METRICS/NOOP; note JDBC/JMX v1-deferred), `backendState:` (username/password/ssl/xForwardedProtoHeader), and `monitor:` stats knobs with the Java default values shown
+- [ ] `README.md` — "Live cluster stats" subsection: the four monitor types; INFO_API/NOOP issue no extra HTTP (reuse the health probe); the dedicated `statsClient` (4th client) for UI_API/METRICS; the M7 endpoint + 9-field shape
+- [ ] `docs/SCOPE.md` §2 — "Cluster-stats monitor types JDBC / JMX (v1-deferred)" note (rejected by `Validate()`; ref R8; gap-closure, no §5 sign-off — lead-confirmed)
+- [ ] `docs/SCOPE.md` §1 — add "Live queued/running cluster stats (UC-MON-02 / M7)" with the divergence notes: (a) shared `clusterstatus` enum + new `UNKNOWN`; (b) unobserved-default object populated from persistence (not Java null), `userQueuedCount` null until UI_API
+- [ ] `docs/PRD.md` — mark cluster-stats monitoring / M7 implemented; note the INFO_API `starting→PENDING` correction
+- [ ] `docs/topics/gateway-docs-compatibility-audit.md` — mark the M7 gap-closure resolved (add a short M7 entry if absent)
+- [ ] `docs/trino-goway-use-cases-comparison.md` — record the two intentional divergences as prose (b: persistence-populated default; the one-session UI_API optimization vs Java fresh-login-per-GET) so they're not later flagged as accidental gaps (the checkbox flips themselves are Task 87)
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
+
+### Task 87 — Use-case-doc reconciliation (flip once feature + tests land)
+
+Edits to `docs/trino-goway-use-cases-comparison.md`. Apply bottom-up (table rows last→first); re-grep by UC id as line numbers shift. Deps: 79, 84 (the behaviors being asserted).
+
+- [ ] **UC-MON-02** (~82): `[ ]→[x]` — "✅ live queued/running via config-selectable collector (INFO_API default / UI_API / METRICS). `internal/clusterstats/`. E2E `TestE2E_ClusterStats_*`."
+- [ ] **UC-ADM-14** (~109): `[ ]→[x]` — "✅ returns `ClusterStatsResponse` ({trinoStatus, queuedQueryCount, runningQueryCount, numWorkerNodes, userQueuedCount, proxyTo, externalUrl, routingGroup}) — M7 closed; counts live under UI_API/METRICS, 0 under INFO_API; unobserved default populated from persistence."
+- [ ] **UC-ADM-15** (~110): `[ ]→[x]` — "✅ getAllBackends Queued/Running from the stats store (live under UI_API/METRICS; 0 under INFO_API default)."
+- [ ] **UC-UI-05** (~151): keep `[x]`, drop the "⚠️ queued/running tiles read 0 (MON-02)" qualifier — "✅ backend supports it; queued/running tiles live under UI_API/METRICS collectors."
+- [ ] Wire-shape table (~190/193): remove the now-closed `M7` row and the `queued`/`running` always-`0` row; fold into the "closed" note (~197–199)
+- [ ] Non-goals table (~210): remove the `MON-02` row
+- [ ] Sanity-check **UC-MON-01** (~81): `{"starting":false} ⇒ HEALTHY` unchanged; only starting=true flips UNHEALTHY→PENDING (MON-02 territory)
+- [ ] `go vet ./...` + `golangci-lint run ./...` pass
