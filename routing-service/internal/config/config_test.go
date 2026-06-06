@@ -62,6 +62,65 @@ defaultRoutingGroup: "default"
 	if cfg.MetricsAddr != ":9091" {
 		t.Errorf("MetricsAddr default = %q, want %q", cfg.MetricsAddr, ":9091")
 	}
+	// sqlParsing defaults: enabled, 256 KiB cap.
+	if !cfg.SQLParsing.Enabled {
+		t.Errorf("SQLParsing.Enabled default = false, want true")
+	}
+	if cfg.SQLParsing.MaxBodyBytes != 256*1024 {
+		t.Errorf("SQLParsing.MaxBodyBytes default = %d, want %d", cfg.SQLParsing.MaxBodyBytes, 256*1024)
+	}
+}
+
+func TestLoad_SQLParsing(t *testing.T) {
+	t.Run("explicit values", func(t *testing.T) {
+		path := writeTemp(t, `
+defaultRoutingGroup: "default"
+sqlParsing:
+  enabled: true
+  maxBodyBytes: 1024
+`)
+		cfg, err := config.Load(path)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if !cfg.SQLParsing.Enabled {
+			t.Errorf("Enabled = false, want true")
+		}
+		if cfg.SQLParsing.MaxBodyBytes != 1024 {
+			t.Errorf("MaxBodyBytes = %d, want 1024", cfg.SQLParsing.MaxBodyBytes)
+		}
+	})
+
+	t.Run("enabled false overrides default-on", func(t *testing.T) {
+		path := writeTemp(t, `
+defaultRoutingGroup: "default"
+sqlParsing:
+  enabled: false
+`)
+		cfg, err := config.Load(path)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.SQLParsing.Enabled {
+			t.Errorf("Enabled = true, want false (explicit enabled: false)")
+		}
+		// Omitted maxBodyBytes still falls back to the default.
+		if cfg.SQLParsing.MaxBodyBytes != 256*1024 {
+			t.Errorf("MaxBodyBytes = %d, want default %d", cfg.SQLParsing.MaxBodyBytes, 256*1024)
+		}
+	})
+
+	t.Run("negative maxBodyBytes is invalid", func(t *testing.T) {
+		path := writeTemp(t, `
+defaultRoutingGroup: "default"
+sqlParsing:
+  enabled: true
+  maxBodyBytes: -1
+`)
+		if _, err := config.Load(path); err == nil {
+			t.Fatalf("Load: expected error for negative maxBodyBytes")
+		}
+	})
 }
 
 func TestLoad_FileNotFound(t *testing.T) {

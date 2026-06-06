@@ -35,6 +35,17 @@ type DecisionFields struct {
 	ConfigVersionHash string
 	// Fallback is true when no method decided (default group used).
 	Fallback bool
+
+	// SQL-aware routing fields (UC-RTG-04). PII-safe: the statement type, coarse
+	// category, and aggregate COUNTS only — never parsed identifiers, never raw
+	// SQL. QueryType/QueryCategory are empty when SQL parsing is off or the
+	// request is a non-new submission.
+	QueryType     string
+	QueryCategory string
+	SQLParseOK    bool
+	CatalogCount  int
+	SchemaCount   int
+	TableCount    int
 }
 
 // sampler decides whether a given decision should be logged.
@@ -84,6 +95,13 @@ func (d *DecisionLogger) Log(ctx context.Context, f DecisionFields) {
 		slog.Int64("latency_ms", f.Latency.Milliseconds()),
 		slog.String("config_version_hash", f.ConfigVersionHash),
 		slog.Bool("fallback", f.Fallback),
+		// SQL-aware routing (UC-RTG-04): type/category + COUNTS only (PII rule).
+		slog.String("query_type", f.QueryType),
+		slog.String("query_category", f.QueryCategory),
+		slog.Bool("sql_parse_ok", f.SQLParseOK),
+		slog.Int("catalog_count", f.CatalogCount),
+		slog.Int("schema_count", f.SchemaCount),
+		slog.Int("table_count", f.TableCount),
 	)
 }
 

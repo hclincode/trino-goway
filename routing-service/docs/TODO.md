@@ -9,7 +9,7 @@ Off critical path (start after RS-2): RS-6, RS-7, RS-8
 Off critical path (start after RS-3): RS-10, RS-11, RS-12
 
 **Status: Phase 1 COMPLETE** -- RS-1..RS-14 implemented, go-qa-verified, and committed to main (HEAD a06176d). Backlog below is deferred (not Phase 1).
-**Phase 9 (RS-15–RS-17) — UC-RTG-04 SQL-aware routing inputs** is newly planned post-v1 work; not yet started.
+**Phase 9 (RS-15–RS-17) — UC-RTG-04 SQL-aware routing inputs** COMPLETE — in-service best-effort SQL analyzer (`internal/sqlmeta`) wired into `RouteInput` + `expr`/`script` providers, with `sqlParsing` config, metrics, PII-safe decision logs, authoring docs, and an integration test. DoD-green (build/vet/`test -race`/lint + integration gate). Left in the working tree for the team lead to integrate/commit.
 
 ---
 
@@ -541,35 +541,35 @@ Realizes **UC-RTG-04 ("SQL-aware routing inputs")** on the routing-service side.
 
 ### Task RS-15 — `internal/sqlmeta` analyzer + parser-strategy decision
 
-- [ ] **Decision:** pick the Phase-9 SQL-analysis backend and record it in `docs/CONVENTIONS.md` with rationale. Options — **(A)** best-effort pure-Go heuristic tokenizer (statement keyword + `FROM`/`JOIN`/`INTO`/`UPDATE`/`MERGE INTO` table refs, CTE/comment/string-literal aware); **(B)** ANTLR4 Trino grammar → Go runtime (faithful to Java `trino-parser`, but heavy: vendored grammar + codegen + runtime dep + slower); **(C)** a general Go SQL parser (vitess/pingcap — MySQL dialect, poor Trino fit: 3-part `catalog.schema.table` names, Trino-specific syntax). **Recommended: (A)** for v1 — no codegen, O(n), sandbox-safe, matches the PRD "best-effort" stance; leave `SQLAnalyzer` as the seam to swap in (B) later.
-- [ ] `internal/sqlmeta/doc.go` — package doc; restate the PII rule (never log raw SQL; `sha256(body)[:8]` only)
-- [ ] `internal/sqlmeta/analyzer.go` — `type SQLAnalyzer interface { Analyze(sql string) QueryMeta }`; `type QueryMeta struct { QueryType string; Category string; Catalogs, Schemas, CatalogSchemas, Tables []string; ParseOK bool }` (`Category` ∈ `READ|WRITE|DDL|DML|EXPLAIN|OTHER` for coarse routing); slices always non-nil
-- [ ] `internal/sqlmeta/heuristic.go` — default analyzer: strip comments + string literals; first significant keyword → `QueryType` (`SELECT`/`INSERT`/`UPDATE`/`DELETE`/`MERGE`/`CREATE`/`DROP`/`ALTER`/`EXPLAIN`/`SHOW`/`CALL`/…) → `Category`; extract table refs after `FROM`/`JOIN`/`INTO`/`UPDATE`/`MERGE INTO`; resolve 1/2/3-part names against `defaultCatalog`/`defaultSchema` into `catalog.schema.table`; populate `Catalogs`/`Schemas`/`CatalogSchemas`/`Tables` (deduped, sorted); `ParseOK=false` on empty/unrecognized input
-- [ ] Safety guards: cap analyzed length (config `maxBodyBytes`, default 256 KiB), no backtracking-explosive regex, single O(n) scan — a hostile/huge body must not stall routing
-- [ ] `internal/sqlmeta/heuristic_test.go` — table-driven across statement types, 1/2/3-part + quoted identifiers, CTEs, line/block comments, default-qualification, multi-statement, and non-SQL/empty (`ParseOK=false`)
-- [ ] **DoD:** `go build ./... && go vet ./... && go test -race ./... && golangci-lint run ./...` green from `routing-service/`
+- [x] **Decision:** pick the Phase-9 SQL-analysis backend and record it in `docs/CONVENTIONS.md` with rationale. Options — **(A)** best-effort pure-Go heuristic tokenizer (statement keyword + `FROM`/`JOIN`/`INTO`/`UPDATE`/`MERGE INTO` table refs, CTE/comment/string-literal aware); **(B)** ANTLR4 Trino grammar → Go runtime (faithful to Java `trino-parser`, but heavy: vendored grammar + codegen + runtime dep + slower); **(C)** a general Go SQL parser (vitess/pingcap — MySQL dialect, poor Trino fit: 3-part `catalog.schema.table` names, Trino-specific syntax). **Recommended: (A)** for v1 — no codegen, O(n), sandbox-safe, matches the PRD "best-effort" stance; leave `SQLAnalyzer` as the seam to swap in (B) later. → **Chose (A)**; rationale + options table + upgrade seam recorded in `docs/CONVENTIONS.md` ("SQL-analysis backend (Phase 9, UC-RTG-04)").
+- [x] `internal/sqlmeta/doc.go` — package doc; restate the PII rule (never log raw SQL; `sha256(body)[:8]` only) → `internal/sqlmeta/doc.go`
+- [x] `internal/sqlmeta/analyzer.go` — `SQLAnalyzer` interface + `QueryMeta` (`Category` ∈ `READ|WRITE|DDL|DML|EXPLAIN|OTHER`; slices always non-nil). Signature is `Analyze(sql, defaultCatalog, defaultSchema string) QueryMeta` (defaults are needed to qualify 1/2-part names); also ships `Noop` (disabled-parsing analyzer). → `internal/sqlmeta/analyzer.go`
+- [x] `internal/sqlmeta/heuristic.go` — default analyzer: single-pass tokenizer strips line/block comments + string literals; leading keyword → `QueryType` → `Category`; table refs after `FROM`/`JOIN`/`INTO`/`UPDATE`/`MERGE INTO`/`TABLE`; 1/2/3-part + quoted names resolved against defaults into `catalog.schema.table`; deduped+sorted sets; `ParseOK=false` on empty/unrecognized. → `internal/sqlmeta/heuristic.go`
+- [x] Safety guards: `maxBodyBytes` cap (default 256 KiB, `DefaultMaxBodyBytes`), single O(n) scan, no regex. `AnalyzeWithTruncation` reports the truncation. → `heuristic.go:analyze`; `TestHeuristic_SizeCap`
+- [x] `internal/sqlmeta/heuristic_test.go` — table-driven across statement types, 1/2/3-part + quoted identifiers, CTEs, line/block comments, default-qualification, string-literal safety, and non-SQL/empty (`ParseOK=false`). → `internal/sqlmeta/heuristic_test.go::TestHeuristic_Analyze`
+- [x] **DoD:** `go build ./... && go vet ./... && go test -race ./... && golangci-lint run ./...` green from `routing-service/` (lint: 0 issues)
 
 ### Task RS-16 — Wire SQL metadata into `RouteInput` + providers
 
-- [ ] `internal/engine/method.go` — extend `RouteInput` with `QueryType string`, `QueryCategory string`, `Catalogs []string`, `Schemas []string`, `CatalogSchemas []string`, `Tables []string`, `ParseOK bool` (doc each; note they are only meaningful when `IsNew`)
-- [ ] `internal/engine/input.go` `FromProto` — populate the new fields: **prefer** non-empty proto `trino_query_properties` parsed fields (forward-compat with a future SQL-aware gateway); normalize nil→empty slices. Keep `FromProto` pure (no analyzer dependency)
-- [ ] Analyzer wiring without globals (CONVENTIONS no-global-state): perform `Analyze(body)` at the server/pipeline boundary where the `SQLAnalyzer` is constructed and injected — only when `IsNew` and `body` is non-empty and the proto parsed fields were absent — then fill the `RouteInput` fields before provider evaluation
-- [ ] `internal/engine/providers/expr/provider.go` — extend `requestFields` with `query_type`, `query_category`, `catalogs`, `schemas`, `catalog_schemas`, `tables`, `parse_ok` (snake_case `expr:` tags); extend `buildEnv`
-- [ ] `internal/engine/providers/script/` — expose the same fields on the Starlark `request` input struct
-- [ ] Unit tests: `FromProto` proto-provided-wins vs derive-from-body; expr program routing on `request.query_type == "INSERT"` and `"hive" in request.catalogs`; Starlark equivalent; `parse_ok=false` → providers defer/fallback
-- [ ] **DoD:** providers route on query content; analysis fires only on `is_new`; `go build/vet/test -race/lint` green
+- [x] `internal/engine/method.go` — extended `RouteInput` with `QueryType`, `QueryCategory`, `Catalogs`, `Schemas`, `CatalogSchemas`, `Tables`, `ParseOK` (each doc'd; "only meaningful when `IsNew`"). → `internal/engine/method.go`
+- [x] `internal/engine/input.go` `FromProto` — populates the new fields, **preferring** non-empty proto parsed fields (`HasParsedSQL`), normalises nil→empty slices, stays pure (no analyzer dep). → `internal/engine/input.go`
+- [x] Analyzer wiring without globals: `Analyze` runs at the `PipelineEvaluator` boundary (`inputFromProto`/`fillSQLMeta`), injected via `WithSQLAnalyzer`, only when `IsNew && body != "" && !HasParsedSQL`. Default is `sqlmeta.Noop` (parsing off). `FromProto` stays pure. → `internal/engine/adapter.go`
+- [x] `internal/engine/providers/expr/provider.go` — `requestFields` + `buildEnv` extended with snake_case `query_type`/`query_category`/`catalogs`/`schemas`/`catalog_schemas`/`tables`/`parse_ok`. → `internal/engine/providers/expr/provider.go`
+- [x] `internal/engine/providers/script/` — same fields exposed on the Starlark `req` struct (`buildReqValue`). → `internal/engine/providers/script/provider.go`
+- [x] Unit tests: `FromProto` proto-wins vs derive-from-body, analysis-only-on-`is_new`, Noop→`parse_ok=false`, PII-safe summary, observer. expr + Starlark content routing (`query_type`/`catalogs`/`tables`/`parse_ok`). → `internal/engine/sqlmeta_test.go`, `internal/engine/providers/expr/sqlmeta_test.go`, `internal/engine/providers/script/sqlmeta_test.go`
+- [x] **DoD:** providers route on query content; analysis fires only on `is_new`; `go build/vet/test -race/lint` green
 
 ### Task RS-17 — Config toggle, observability, docs, integration test
 
-- [ ] `internal/config/config.go` — `sqlParsing` block: `enabled bool` (default `true`), `maxBodyBytes` (default 256 KiB); validate; thread into the analyzer constructor (disabled ⇒ inject a no-op analyzer, all fields empty, `parse_ok=false`)
-- [ ] `docs/config.example.yaml` — documented `sqlParsing:` block
-- [ ] `internal/metrics/` — `routing_service_sql_parse_total{result="ok|empty|error"}`, `routing_service_sql_parse_duration_seconds` histogram, `routing_service_sql_parse_truncated_total`; registered on the service's own registry (no global)
-- [ ] Structured decision log — add `query_type`, `query_category`, and table/catalog **counts**; **never** the raw SQL (`sha256(body)[:8]` only), per CONVENTIONS PII rule
-- [ ] `docs/expr-authoring.md` + `docs/starlark-authoring.md` — add a "Routing on query content (UC-RTG-04)" section with examples (`query_type`, `tables`, `catalogs`); document best-effort / `parse_ok` semantics and the header-fallback pattern
-- [ ] `tools/expr-test` + `tools/starlark-test` — extend sample inputs (`tools/testdata/`) with parsed-SQL fields so authors can test content rules offline
-- [ ] `internal/integration/` (`-tags=integration`) — gateway→service round-trip: POST `/v1/statement` with an `INSERT …` body → routes to `etl`; `SELECT … FROM hive.…` → `analytics`; an unparseable body → falls back to source/default (no error, health stays `SERVING`)
-- [ ] `docs/PRD.md` — update §5 (no-SQL-parsing limitation) and §4.1 to record that best-effort in-service SQL analysis is now available; cross-reference UC-RTG-04
-- [ ] **DoD:** end-to-end content routing verified by the integration test; metrics + decision-log fields exposed; docs updated; `go build/vet/test -race/lint` + integration gate green
+- [x] `internal/config/config.go` — `sqlParsing` block (`enabled` default `true`, `maxBodyBytes` default 256 KiB); validated (`maxBodyBytes >= 0`); main.go injects `sqlmeta.NewHeuristic` when enabled, else the default `Noop` analyzer (fields empty, `parse_ok=false`). → `internal/config/config.go`, `cmd/routing-service/main.go`; `internal/config/config_test.go::TestLoad_SQLParsing`
+- [x] `docs/config.example.yaml` — documented `sqlParsing:` block + SQL-aware expr branches (validates: `routing-service-validate` exit 0). → `docs/config.example.yaml`
+- [x] `internal/metrics/` — `routing_service_sql_parse_total{result}`, `_duration_seconds` histogram, `_truncated_total`, on the service's own registry. → `internal/metrics/metrics.go::RecordSQLParse`; `internal/metrics/metrics_test.go::TestRecordSQLParse`
+- [x] Structured decision log — `query_type`, `query_category`, `sql_parse_ok`, and `{catalog,schema,table}_count`; never raw SQL (`sha256(body)[:8]`). PII verified by test. → `internal/logging/decision.go`, `internal/engine/pipeline.go::SQLSummary`; `internal/logging/decision_test.go::TestLog_SQLFields_CountsOnly_NoRawSQL`
+- [x] `docs/expr-authoring.md` + `docs/starlark-authoring.md` — "Routing on query content (UC-RTG-04)" section with field table, best-effort/`parse_ok` semantics, and the `parse_ok`-gated header-fallback pattern. → both docs
+- [x] `tools/expr-test` + `tools/starlark-test` — sample inputs carry parsed-SQL fields (`query_type`/`catalogs`/`tables`/`parse_ok`); fixtures under `tools/testdata/` (`.expr`/`.star` + `-samples.yaml` + `-expected.yaml`), both tools exit 0. → `tools/internal/toolinput/input.go`, `tools/testdata/`
+- [x] `internal/integration/` (`-tags=integration`) — `INSERT …` body → `etl`; `SELECT … FROM hive.…` → `analytics`; default-catalog qualification; unparseable body → source/default fallback (no error, health `SERVING`); proto-parsed-fields-win. → `internal/integration/content_routing_test.go` (harness now mirrors prod SQL wiring)
+- [x] `docs/PRD.md` — §3 non-goal updated, §4.1 SQL-aware fields note, §5 item 9 + fail-safe note, cross-referencing UC-RTG-04. → `docs/PRD.md`
+- [x] **DoD:** content routing verified by integration test; metrics + decision-log fields exposed; docs updated; `go build/vet/test -race/lint` + integration gate green
 
 ---
 

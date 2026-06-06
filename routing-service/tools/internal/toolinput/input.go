@@ -26,6 +26,17 @@ type jsonInput struct {
 	Body       string            `json:"body"`
 	IsNew      bool              `json:"is_new"`
 	ParamMap   map[string]string `json:"param_map"`
+
+	// SQL-aware routing fields (UC-RTG-04). Supply these directly to test content
+	// rules offline; the CLI tools evaluate the provider against the given input
+	// and do not run the in-service analyzer themselves.
+	QueryType      string   `json:"query_type"`
+	QueryCategory  string   `json:"query_category"`
+	Catalogs       []string `json:"catalogs"`
+	Schemas        []string `json:"schemas"`
+	CatalogSchemas []string `json:"catalog_schemas"`
+	Tables         []string `json:"tables"`
+	ParseOK        bool     `json:"parse_ok"`
 }
 
 // Parse parses a RouteInput from s, which is either:
@@ -59,18 +70,33 @@ func Parse(s string) (*engine.RouteInput, error) {
 	}
 
 	return &engine.RouteInput{
-		Source:     ji.Source,
-		User:       ji.User,
-		ClientTags: ji.ClientTags,
-		Catalog:    ji.Catalog,
-		Schema:     ji.Schema,
-		Method:     ji.Method,
-		URI:        ji.URI,
-		RemoteAddr: ji.RemoteAddr,
-		Body:       ji.Body,
-		IsNew:      ji.IsNew,
-		ParamMap:   ji.ParamMap,
+		Source:         ji.Source,
+		User:           ji.User,
+		ClientTags:     ji.ClientTags,
+		Catalog:        ji.Catalog,
+		Schema:         ji.Schema,
+		Method:         ji.Method,
+		URI:            ji.URI,
+		RemoteAddr:     ji.RemoteAddr,
+		Body:           ji.Body,
+		IsNew:          ji.IsNew,
+		ParamMap:       ji.ParamMap,
+		QueryType:      ji.QueryType,
+		QueryCategory:  ji.QueryCategory,
+		Catalogs:       nilToEmpty(ji.Catalogs),
+		Schemas:        nilToEmpty(ji.Schemas),
+		CatalogSchemas: nilToEmpty(ji.CatalogSchemas),
+		Tables:         nilToEmpty(ji.Tables),
+		ParseOK:        ji.ParseOK,
 	}, nil
+}
+
+// nilToEmpty normalises a nil slice to a non-nil empty slice.
+func nilToEmpty(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 // looksLikeFile returns true when s appears to be a file path rather than
@@ -104,6 +130,15 @@ type SampleRecord struct {
 	Body       string            `yaml:"body"`
 	IsNew      bool              `yaml:"is_new"`
 	ParamMap   map[string]string `yaml:"param_map"`
+
+	// SQL-aware routing fields (UC-RTG-04); see jsonInput.
+	QueryType      string   `yaml:"query_type"`
+	QueryCategory  string   `yaml:"query_category"`
+	Catalogs       []string `yaml:"catalogs"`
+	Schemas        []string `yaml:"schemas"`
+	CatalogSchemas []string `yaml:"catalog_schemas"`
+	Tables         []string `yaml:"tables"`
+	ParseOK        bool     `yaml:"parse_ok"`
 }
 
 // ToRouteInput converts a SampleRecord to a RouteInput.
@@ -117,16 +152,23 @@ func (s SampleRecord) ToRouteInput() *engine.RouteInput {
 		pm = map[string]string{}
 	}
 	return &engine.RouteInput{
-		Source:     s.Source,
-		User:       s.User,
-		ClientTags: tags,
-		Catalog:    s.Catalog,
-		Schema:     s.Schema,
-		Method:     s.Method,
-		URI:        s.URI,
-		RemoteAddr: s.RemoteAddr,
-		Body:       s.Body,
-		IsNew:      s.IsNew,
-		ParamMap:   pm,
+		Source:         s.Source,
+		User:           s.User,
+		ClientTags:     tags,
+		Catalog:        s.Catalog,
+		Schema:         s.Schema,
+		Method:         s.Method,
+		URI:            s.URI,
+		RemoteAddr:     s.RemoteAddr,
+		Body:           s.Body,
+		IsNew:          s.IsNew,
+		ParamMap:       pm,
+		QueryType:      s.QueryType,
+		QueryCategory:  s.QueryCategory,
+		Catalogs:       nilToEmpty(s.Catalogs),
+		Schemas:        nilToEmpty(s.Schemas),
+		CatalogSchemas: nilToEmpty(s.CatalogSchemas),
+		Tables:         nilToEmpty(s.Tables),
+		ParseOK:        s.ParseOK,
 	}
 }

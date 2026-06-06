@@ -64,7 +64,27 @@ type Config struct {
 	// Methods is the ordered list of routing method providers.
 	// The pipeline evaluates them in order; first definitive decision wins.
 	Methods []MethodConfig `yaml:"methods"`
+	// SQLParsing configures in-service SQL analysis for SQL-aware routing
+	// (UC-RTG-04). Enabled by default; see SQLParsingConfig.
+	SQLParsing SQLParsingConfig `yaml:"sqlParsing"`
 }
+
+// SQLParsingConfig controls the best-effort in-service SQL analyzer (UC-RTG-04).
+// When enabled, the service parses the query body to derive query_type /
+// catalogs / schemas / tables for routing rules. When disabled, those fields are
+// always empty and rules fall back to header/source routing.
+type SQLParsingConfig struct {
+	// Enabled toggles in-service SQL analysis. Default: true.
+	Enabled bool `yaml:"enabled"`
+	// MaxBodyBytes caps the number of SQL bytes analysed per request. A larger
+	// body is truncated before analysis so a hostile/huge body cannot stall
+	// routing. Default: 262144 (256 KiB). Must be non-negative.
+	MaxBodyBytes int `yaml:"maxBodyBytes"`
+}
+
+// defaultMaxBodyBytes mirrors sqlmeta.DefaultMaxBodyBytes (256 KiB). Duplicated
+// here to keep config free of an engine/sqlmeta import.
+const defaultMaxBodyBytes = 256 * 1024
 
 // Load reads a YAML config file at path, applies defaults, and validates.
 func Load(path string) (*Config, error) {
@@ -89,6 +109,13 @@ func defaultConfig() *Config {
 		Addr:        ":9001",
 		MetricsAddr: ":9091",
 		AdminAddr:   ":9092",
+		// SQL parsing defaults to ON. An absent sqlParsing block leaves these
+		// pre-filled values intact; an explicit `sqlParsing:` block overrides
+		// them. `enabled: false` therefore turns parsing off as expected.
+		SQLParsing: SQLParsingConfig{
+			Enabled:      true,
+			MaxBodyBytes: defaultMaxBodyBytes,
+		},
 	}
 }
 
@@ -108,6 +135,12 @@ func applyDefaults(cfg *Config) {
 	if cfg.AdminAddr == "" {
 		cfg.AdminAddr = ":9092"
 	}
+	// A sqlParsing block that omits maxBodyBytes leaves it at the zero value
+	// (yaml merges over the pre-filled default); restore the default so an
+	// operator only has to set `enabled:` to toggle parsing.
+	if cfg.SQLParsing.MaxBodyBytes == 0 {
+		cfg.SQLParsing.MaxBodyBytes = defaultMaxBodyBytes
+	}
 }
 
 // Validate checks the configuration for logical errors.
@@ -125,6 +158,9 @@ func (c *Config) Validate() error {
 		if m.Program == "" && m.File == "" {
 			return fmt.Errorf("config: validate: methods[%d]: exactly one of program or file must be set", i)
 		}
+	}
+	if c.SQLParsing.MaxBodyBytes < 0 {
+		return fmt.Errorf("config: validate: sqlParsing.maxBodyBytes must be non-negative")
 	}
 	return nil
 }

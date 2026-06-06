@@ -78,6 +78,14 @@ The `request.*` (expr) / `req.*` (Starlark) context exposes snake_case fields:
 gives deterministic canary buckets. Return `""` (expr) / `None` (Starlark) to
 defer to the next method.
 
+**SQL-aware routing (UC-RTG-04).** With `sqlParsing.enabled` (default on), the
+service parses the query `body` in-process and adds `query_type`,
+`query_category`, `catalogs`, `schemas`, `catalog_schemas`, `tables`, and
+`parse_ok` to the same context — so rules can route writes to ETL or
+hive-touching reads to a warehouse group. Analysis is best-effort: a parse miss
+sets `parse_ok=false` (never an error), so gate content rules on `parse_ok` and
+fall back to header routing. See the authoring docs for examples.
+
 ## CLI tools
 
 Author and test rules with the same providers production uses:

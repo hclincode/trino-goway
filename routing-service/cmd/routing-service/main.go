@@ -19,6 +19,7 @@ import (
 	exprovider "github.com/hclincode/trino-goway-routing-service/internal/engine/providers/expr"
 	scriptprovider "github.com/hclincode/trino-goway-routing-service/internal/engine/providers/script"
 	"github.com/hclincode/trino-goway-routing-service/internal/metrics"
+	"github.com/hclincode/trino-goway-routing-service/internal/sqlmeta"
 	"github.com/hclincode/trino-goway-routing-service/internal/reload"
 	"github.com/hclincode/trino-goway-routing-service/internal/server"
 	"github.com/hclincode/trino-goway-routing-service/internal/tracing"
@@ -70,7 +71,6 @@ func main() {
 	}
 
 	pipeline := engine.NewPipeline(methods, cfg.DefaultRoutingGroup, log)
-	eval := engine.NewPipelineEvaluator(pipeline)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
@@ -78,6 +78,22 @@ func main() {
 	// RS-9: observability. Own Prometheus registry (no global) + OTel tracing
 	// (optional; disabled when cfg.TracingEndpoint is empty).
 	m := metrics.New()
+
+	// RS-16/17: SQL-aware routing (UC-RTG-04). When enabled, inject the
+	// best-effort heuristic analyzer plus a metrics observer; when disabled,
+	// a no-op analyzer leaves the SQL fields empty (header/source routing only).
+	evalOpts := []engine.EvaluatorOption{}
+	if cfg.SQLParsing.Enabled {
+		log.Info("routing-service: SQL-aware routing enabled",
+			"maxBodyBytes", cfg.SQLParsing.MaxBodyBytes)
+		evalOpts = append(evalOpts,
+			engine.WithSQLAnalyzer(sqlmeta.NewHeuristic(cfg.SQLParsing.MaxBodyBytes)),
+			engine.WithSQLObserver(func(result string, dur time.Duration, truncated bool) {
+				m.RecordSQLParse(metrics.SQLParseResult(result), dur, truncated)
+			}),
+		)
+	}
+	eval := engine.NewPipelineEvaluator(pipeline, evalOpts...)
 	tp, prop, tpShutdown, err := tracing.Init(ctx, tracing.Config{
 		Endpoint: cfg.TracingEndpoint,
 		Insecure: true,

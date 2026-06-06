@@ -49,6 +49,15 @@ type requestFields struct {
 	Body       string            `expr:"body"`
 	IsNew      bool              `expr:"is_new"`
 	ParamMap   map[string]string `expr:"param_map"`
+
+	// SQL-aware routing fields (UC-RTG-04). Meaningful only when ParseOK is true.
+	QueryType      string   `expr:"query_type"`
+	QueryCategory  string   `expr:"query_category"`
+	Catalogs       []string `expr:"catalogs"`
+	Schemas        []string `expr:"schemas"`
+	CatalogSchemas []string `expr:"catalog_schemas"`
+	Tables         []string `expr:"tables"`
+	ParseOK        bool     `expr:"parse_ok"`
 }
 
 // Provider implements engine.RoutingMethod using expr-lang/expr.
@@ -164,19 +173,35 @@ func buildEnv(in *engine.RouteInput) routeEnv {
 	}
 	return routeEnv{
 		Request: requestFields{
-			Source:     in.Source,
-			ClientTags: tags,
-			User:       in.User,
-			Catalog:    in.Catalog,
-			Schema:     in.Schema,
-			Method:     in.Method,
-			URI:        in.URI,
-			RemoteAddr: in.RemoteAddr,
-			Body:       in.Body,
-			IsNew:      in.IsNew,
-			ParamMap:   pm,
+			Source:         in.Source,
+			ClientTags:     tags,
+			User:           in.User,
+			Catalog:        in.Catalog,
+			Schema:         in.Schema,
+			Method:         in.Method,
+			URI:            in.URI,
+			RemoteAddr:     in.RemoteAddr,
+			Body:           in.Body,
+			IsNew:          in.IsNew,
+			ParamMap:       pm,
+			QueryType:      in.QueryType,
+			QueryCategory:  in.QueryCategory,
+			Catalogs:       nilToEmpty(in.Catalogs),
+			Schemas:        nilToEmpty(in.Schemas),
+			CatalogSchemas: nilToEmpty(in.CatalogSchemas),
+			Tables:         nilToEmpty(in.Tables),
+			ParseOK:        in.ParseOK,
 		},
 	}
+}
+
+// nilToEmpty normalises a nil slice to a non-nil empty slice so expr programs
+// can use `in` / `len()` over the SQL-aware fields without a nil guard.
+func nilToEmpty(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 // extractSource parses the YAML config bytes produced by engine.Registry.methodConfigBytes

@@ -221,9 +221,28 @@ func buildReqValue(in *engine.RouteInput) starlark.Value {
 		"body":        starlark.String(in.Body),
 		"is_new":      starlark.Bool(in.IsNew),
 		"param_map":   paramDict,
+		// SQL-aware routing fields (UC-RTG-04). Meaningful only when parse_ok.
+		"query_type":      starlark.String(in.QueryType),
+		"query_category":  starlark.String(in.QueryCategory),
+		"catalogs":        stringList(in.Catalogs),
+		"schemas":         stringList(in.Schemas),
+		"catalog_schemas": stringList(in.CatalogSchemas),
+		"tables":          stringList(in.Tables),
+		"parse_ok":        starlark.Bool(in.ParseOK),
 	})
 	s.Freeze()
 	return s
+}
+
+// stringList wraps a Go string slice as a Starlark list of strings (empty list
+// for a nil/empty slice), so scripts can use `in` / `len()` over the SQL-aware
+// fields without a nil guard.
+func stringList(ss []string) *starlark.List {
+	vals := make([]starlark.Value, len(ss))
+	for i, s := range ss {
+		vals[i] = starlark.String(s)
+	}
+	return starlark.NewList(vals)
 }
 
 // extractSource parses the YAML config bytes produced by

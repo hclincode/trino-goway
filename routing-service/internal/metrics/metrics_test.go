@@ -142,6 +142,26 @@ func TestRecordReload(t *testing.T) {
 	}
 }
 
+func TestRecordSQLParse(t *testing.T) {
+	m := metrics.New()
+	m.RecordSQLParse(metrics.SQLParseOK, 50*time.Microsecond, false)
+	m.RecordSQLParse(metrics.SQLParseOK, 60*time.Microsecond, true) // truncated
+	m.RecordSQLParse(metrics.SQLParseEmpty, 10*time.Microsecond, false)
+
+	if got := counterValue(t, m.Registry(), "routing_service_sql_parse_total", map[string]string{"result": "ok"}); got != 2 {
+		t.Errorf("sql_parse ok = %v, want 2", got)
+	}
+	if got := counterValue(t, m.Registry(), "routing_service_sql_parse_total", map[string]string{"result": "empty"}); got != 1 {
+		t.Errorf("sql_parse empty = %v, want 1", got)
+	}
+	if got := counterValue(t, m.Registry(), "routing_service_sql_parse_truncated_total", nil); got != 1 {
+		t.Errorf("sql_parse truncated = %v, want 1", got)
+	}
+	if got := histogramSampleCount(t, m.Registry(), "routing_service_sql_parse_duration_seconds", nil); got != 3 {
+		t.Errorf("sql_parse duration count = %v, want 3", got)
+	}
+}
+
 func TestMethodDisabledGauge(t *testing.T) {
 	m := metrics.New()
 	m.SetMethodDisabled("expr", true)

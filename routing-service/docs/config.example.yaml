@@ -26,6 +26,21 @@ tracingEndpoint: ""
 # routing.defaultGroup fallback for when the service errors or times out.
 defaultRoutingGroup: "default"
 
+# SQL-aware routing (UC-RTG-04). When enabled, the service parses the query body
+# in-process (best-effort, pure-Go heuristic) to derive structured fields for
+# routing rules: request.query_type, request.query_category,
+# request.catalogs/schemas/catalog_schemas/tables, and request.parse_ok.
+# See docs/expr-authoring.md / docs/starlark-authoring.md ("Routing on query
+# content"). A parse miss (parse_ok=false) is never an error — rules fall back to
+# header/source routing. Raw SQL is never logged (sha256(body)[:8] only).
+sqlParsing:
+  # Toggle in-service SQL analysis. Default: true. Set false to disable, in which
+  # case all SQL fields are empty / parse_ok=false and rules use headers only.
+  enabled: true
+  # Cap on SQL bytes analysed per request; a larger body is truncated before
+  # analysis so a hostile/huge body cannot stall routing. Default: 262144 (256 KiB).
+  maxBodyBytes: 262144
+
 # Ordered list of routing methods. The pipeline evaluates them top-to-bottom;
 # the FIRST method that returns a non-empty group wins. A method that defers
 # ("" for expr, None for script) or errors is skipped, and evaluation continues
@@ -34,9 +49,14 @@ defaultRoutingGroup: "default"
 # Each method sets exactly one of `program:` (inline source) or `file:` (path).
 methods:
   # --- expr method: a single expression returning the group name -------------
+  # Note the SQL-aware branches (UC-RTG-04): writes go to ETL, and queries that
+  # touch the `hive` catalog go to the warehouse group. parse_ok gates the
+  # content rules so an unparseable body falls through to header routing.
   - type: expr
     program: |
       request.source == "airflow" ? "etl"
+        : request.parse_ok && request.query_category == "WRITE" ? "etl"
+        : request.parse_ok && "hive" in request.catalogs ? "warehouse"
         : request.source == "superset" ? (hashPct(request.user) < 5 ? "interactive-canary" : "interactive")
         : "tier=premium" in request.client_tags ? "premium"
         : ""

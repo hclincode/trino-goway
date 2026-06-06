@@ -1,0 +1,10 @@
+// Content-routing example (UC-RTG-04). Gate every content rule on parse_ok so
+// an unparseable body falls back to source routing rather than misrouting.
+//
+//   expr-test tools/testdata/content-routing.expr \
+//     --samples tools/testdata/content-routing-samples.yaml \
+//     --expect  tools/testdata/content-routing-expected.yaml
+request.parse_ok && request.query_category == "WRITE" ? "etl"
+  : request.parse_ok && "hive" in request.catalogs ? "warehouse"
+  : request.source == "airflow" ? "etl"
+  : ""

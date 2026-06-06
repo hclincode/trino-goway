@@ -108,3 +108,40 @@ go test -bench=. -benchtime=5s -count=3 ./internal/engine/providers/...
 - Never log raw SQL body text. Always log `sha256(body)[:8]` (8-hex-char prefix).
 - Never log values from `param_map` that may contain passwords or tokens.
 - Structured log fields: `rule_id`, `source`, `user`, `routing_group`, `latency_ms`, `config_version_hash`.
+- SQL-aware routing (UC-RTG-04, Phase 9): the decision log may carry
+  `query_type`, `query_category`, and table/catalog/schema **counts** only —
+  never the parsed identifiers or the raw SQL.
+
+## SQL-analysis backend (Phase 9, UC-RTG-04)
+
+**Decision: (A) best-effort pure-Go heuristic tokenizer.** Recorded here per the
+TODO RS-15 requirement.
+
+The `internal/sqlmeta` package analyses the raw SQL `body` *inside the service*
+to derive structured routing inputs (statement type, coarse category, and the
+catalogs/schemas/tables a query touches). It sits behind a stable
+`SQLAnalyzer` interface so the backend can be swapped without touching providers.
+
+Options considered:
+
+| Option | Verdict |
+|---|---|
+| **(A)** pure-Go heuristic tokenizer (comment/string-literal aware, `FROM`/`JOIN`/`INTO`/`UPDATE`/`MERGE INTO` table refs, CTE-aware, default-qualification, size cap) | **Chosen** for v1 |
+| (B) ANTLR4 Trino grammar → Go runtime (faithful to Java `trino-parser`) | Rejected for v1: heavy (vendored grammar + codegen + runtime dependency), slower; adds a new direct dependency |
+| (C) general Go SQL parser (vitess/pingcap, MySQL dialect) | Rejected: poor Trino fit — no native 3-part `catalog.schema.table` names, Trino-specific syntax |
+
+Rationale for (A):
+- **No codegen, no new heavy dependency** — single-pass, pure stdlib.
+- **O(n)** with a hard `maxBodyBytes` cap (default 256 KiB); a hostile or huge
+  body can never stall routing (no backtracking-explosive regex).
+- **Sandbox-safe** — no I/O, no globals, matches the PRD §5 *best-effort* stance.
+- **Fail-safe** — a parse miss yields empty structured fields + `ParseOK=false`,
+  never an error; providers fall back to header/source routing.
+
+The `SQLAnalyzer` interface is the upgrade seam: a future ANTLR-Trino-grammar
+backend (option B) can be dropped in behind the same interface without changing
+`engine`, the providers, or any rule. **Forward-compatible:** if a future gateway
+populates the parsed proto fields itself, `FromProto` prefers those over
+re-parsing in-service.
+
+PII discipline applies: `sqlmeta` never logs the raw SQL — `sha256(body)[:8]` only.

@@ -306,6 +306,13 @@ func (s *Server) Route(ctx context.Context, req *pb.RouteRequest) (*pb.RouteResp
 		Latency:           latency,
 		ConfigVersionHash: s.configVersion(),
 		Fallback:          !res.Decided,
+		// SQL-aware routing summary (UC-RTG-04). PII-safe: counts only.
+		QueryType:     res.SQL.QueryType,
+		QueryCategory: res.SQL.QueryCategory,
+		SQLParseOK:    res.SQL.ParseOK,
+		CatalogCount:  res.SQL.CatalogCount,
+		SchemaCount:   res.SQL.SchemaCount,
+		TableCount:    res.SQL.TableCount,
 	})
 
 	return &pb.RouteResponse{RoutingGroup: res.RoutingGroup}, nil

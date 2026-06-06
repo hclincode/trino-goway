@@ -74,6 +74,34 @@ type EvalResult struct {
 	Decided bool
 	// HadError is true when at least one method's Evaluate errored and was skipped.
 	HadError bool
+	// SQL carries the PII-safe SQL-analysis summary for the decision log
+	// (UC-RTG-04). Populated by PipelineEvaluator.EvaluateResult; zero-valued for
+	// non-new submissions or when SQL parsing is disabled.
+	SQL SQLSummary
+}
+
+// SQLSummary is the PII-safe view of a request's SQL analysis for decision logs.
+// It carries the statement type, coarse category, and aggregate COUNTS only —
+// never the parsed identifiers and never the raw SQL (CONVENTIONS PII rule).
+type SQLSummary struct {
+	QueryType     string
+	QueryCategory string
+	ParseOK       bool
+	CatalogCount  int
+	SchemaCount   int
+	TableCount    int
+}
+
+// summarize builds a PII-safe SQLSummary from a RouteInput.
+func summarize(in *RouteInput) SQLSummary {
+	return SQLSummary{
+		QueryType:     in.QueryType,
+		QueryCategory: in.QueryCategory,
+		ParseOK:       in.ParseOK,
+		CatalogCount:  len(in.Catalogs),
+		SchemaCount:   len(in.Schemas),
+		TableCount:    len(in.Tables),
+	}
 }
 
 // EvaluateResult runs the pipeline and returns the chosen group together with

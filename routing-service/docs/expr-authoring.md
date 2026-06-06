@@ -28,6 +28,40 @@ The request is exposed as `request` with these snake_case fields (mirroring
 > The service only makes a routing decision when `request.is_new` is true; the
 > gateway handles polls/cancels itself.
 
+### Routing on query content (UC-RTG-04)
+
+When SQL parsing is enabled (`sqlParsing.enabled: true`, the default), the
+service analyses the query `body` **in-process** (best-effort, pure-Go) and
+exposes these additional fields so rules can act on the *content* of a query —
+its statement type and the catalogs/schemas/tables it touches — not just headers:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `request.query_type` | string | leading statement keyword, e.g. `"SELECT"`, `"INSERT"`, `"CREATE"` (upper-case) |
+| `request.query_category` | string | coarse class: `READ`, `WRITE`, `DDL`, `DML`, `EXPLAIN`, `OTHER` |
+| `request.catalogs` | []string | catalogs the query touches (sorted, de-duplicated) |
+| `request.schemas` | []string | schemas the query touches |
+| `request.catalog_schemas` | []string | `"catalog.schema"` pairs |
+| `request.tables` | []string | qualified table references, e.g. `"hive.sales.orders"` |
+| `request.parse_ok` | bool | `true` when analysis recognised the statement |
+
+**Best-effort / `parse_ok` semantics.** Analysis is heuristic, not a full Trino
+parser: it can miss exotic syntax, and a parse miss is **never an error**. When
+`parse_ok` is `false`, every SQL field is empty — your rule should fall back to
+header/source routing. The idiom is to **gate content rules on `parse_ok`**:
+
+```
+// Route writes to ETL and hive reads to the warehouse, else fall back to source.
+request.parse_ok && request.query_category == "WRITE" ? "etl"
+  : request.parse_ok && "hive" in request.catalogs ? "warehouse"
+  : request.source == "airflow" ? "etl"
+  : ""
+```
+
+The fields are only populated for new submissions (`request.is_new`) and only
+when the gateway did not already provide parsed fields. Counts (not identifiers)
+are surfaced in the decision log; the raw SQL is never logged.
+
 ## Helpers
 
 - **`hashPct(s string) int`** — deterministic FNV-1a hash of `s` modulo 100

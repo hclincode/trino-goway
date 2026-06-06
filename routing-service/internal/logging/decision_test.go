@@ -84,6 +84,48 @@ func TestLog_FieldsPresent(t *testing.T) {
 	}
 }
 
+func TestLog_SQLFields_CountsOnly_NoRawSQL(t *testing.T) {
+	var buf bytes.Buffer
+	dl := captureLogger(&buf)
+	dl.Log(context.Background(), logging.DecisionFields{
+		RuleID:        "expr",
+		Source:        "airflow",
+		Body:          "INSERT INTO hive.secret_schema.passwords SELECT * FROM hive.s.src",
+		RoutingGroup:  "etl",
+		Fallback:      true, // force emission
+		QueryType:     "INSERT",
+		QueryCategory: "WRITE",
+		SQLParseOK:    true,
+		CatalogCount:  1,
+		SchemaCount:   2,
+		TableCount:    2,
+	})
+
+	out := buf.String()
+	// PII rule: never the raw SQL or any parsed identifier in the log.
+	for _, leak := range []string{"secret_schema", "passwords", "hive.s.src", "INSERT INTO"} {
+		if strings.Contains(out, leak) {
+			t.Fatalf("decision log leaked SQL content %q:\n%s", leak, out)
+		}
+	}
+
+	var rec map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &rec); err != nil {
+		t.Fatalf("log line is not JSON: %v\n%s", err, out)
+	}
+	for _, k := range []string{"query_type", "query_category", "sql_parse_ok", "catalog_count", "schema_count", "table_count"} {
+		if _, ok := rec[k]; !ok {
+			t.Errorf("log missing SQL field %q; got keys %v", k, keys(rec))
+		}
+	}
+	if rec["query_type"] != "INSERT" {
+		t.Errorf("query_type = %v, want INSERT", rec["query_type"])
+	}
+	if rec["table_count"].(float64) != 2 {
+		t.Errorf("table_count = %v, want 2", rec["table_count"])
+	}
+}
+
 func TestShouldLog_AlwaysOnFallback(t *testing.T) {
 	dl := captureLogger(&bytes.Buffer{})
 	for i := 0; i < 100; i++ {

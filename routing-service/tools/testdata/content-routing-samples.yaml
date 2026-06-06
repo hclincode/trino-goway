@@ -1,0 +1,39 @@
+# UC-RTG-04 content-routing samples. The SQL-aware fields are supplied directly
+# (the CLI tools do not run the in-service analyzer) so authors can exercise
+# content rules offline. Values here mirror what the heuristic analyzer would
+# derive from the corresponding body.
+- id: insert-write
+  source: superset
+  is_new: true
+  body: "INSERT INTO hive.staging.events SELECT * FROM raw.events"
+  query_type: INSERT
+  query_category: WRITE
+  parse_ok: true
+  catalogs: [hive, raw]
+  tables: [hive.staging.events, raw.events]
+
+- id: hive-read
+  source: superset
+  is_new: true
+  body: "SELECT * FROM hive.sales.orders"
+  query_type: SELECT
+  query_category: READ
+  parse_ok: true
+  catalogs: [hive]
+  tables: [hive.sales.orders]
+
+- id: non-hive-read-defers-to-source
+  source: airflow
+  is_new: true
+  body: "SELECT * FROM pg.public.users"
+  query_type: SELECT
+  query_category: READ
+  parse_ok: true
+  catalogs: [pg]
+  tables: [pg.public.users]
+
+- id: unparseable-falls-back-to-source
+  source: airflow
+  is_new: true
+  body: "totally not sql"
+  parse_ok: false

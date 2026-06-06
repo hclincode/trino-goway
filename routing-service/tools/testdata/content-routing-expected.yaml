@@ -1,0 +1,5 @@
+# Expected routing group per sample id (UC-RTG-04 content-routing fixture).
+insert-write: etl
+hive-read: warehouse
+non-hive-read-defers-to-source: etl
+unparseable-falls-back-to-source: etl

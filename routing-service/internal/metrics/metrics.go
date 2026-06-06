@@ -48,7 +48,24 @@ type Metrics struct {
 	reloadTotal    *prometheus.CounterVec   // by result
 	configVersion  *prometheus.GaugeVec     // by hash; value always 1 for the active hash
 	methodDisabled *prometheus.GaugeVec     // by type; 1 disabled, 0 enabled
+
+	sqlParseTotal     *prometheus.CounterVec // by result (ok|empty|error)
+	sqlParseDuration  prometheus.Histogram   // analyzer wall time
+	sqlParseTruncated prometheus.Counter     // bodies truncated to the byte cap
 }
+
+// SQLParseResult labels the SQL-parse counter (UC-RTG-04).
+type SQLParseResult string
+
+const (
+	// SQLParseOK: analysis recognised the statement.
+	SQLParseOK SQLParseResult = "ok"
+	// SQLParseEmpty: analysis ran but recognised nothing (parse miss / non-SQL).
+	SQLParseEmpty SQLParseResult = "empty"
+	// SQLParseError: a backend that can fail returned an error. The default
+	// heuristic never emits this; reserved for a future grammar-based backend.
+	SQLParseError SQLParseResult = "error"
+)
 
 // New builds the collectors on a fresh registry and registers them.
 func New() *Metrics {
@@ -84,12 +101,39 @@ func New() *Metrics {
 			Name: "routing_service_method_disabled",
 			Help: "1 if a routing method is currently disabled (kill-switch), else 0.",
 		}, []string{"type"}),
+		sqlParseTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "routing_service_sql_parse_total",
+			Help: "In-service SQL analyses by result (ok|empty|error) (UC-RTG-04).",
+		}, []string{"result"}),
+		sqlParseDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name: "routing_service_sql_parse_duration_seconds",
+			Help: "In-service SQL analysis wall time in seconds (UC-RTG-04).",
+			Buckets: []float64{
+				0.000_001, 0.000_005, 0.000_01, 0.000_025, 0.000_05,
+				0.000_1, 0.000_25, 0.000_5, 0.001, 0.0025, 0.005,
+			},
+		}),
+		sqlParseTruncated: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "routing_service_sql_parse_truncated_total",
+			Help: "Request bodies truncated to the SQL analyzer byte cap before analysis.",
+		}),
 	}
 	reg.MustRegister(
 		m.requests, m.fallback, m.decisionDur,
 		m.reloadTotal, m.configVersion, m.methodDisabled,
+		m.sqlParseTotal, m.sqlParseDuration, m.sqlParseTruncated,
 	)
 	return m
+}
+
+// RecordSQLParse records one in-service SQL analysis: its result class, wall
+// time, and whether the body was truncated to the byte cap.
+func (m *Metrics) RecordSQLParse(result SQLParseResult, dur time.Duration, truncated bool) {
+	m.sqlParseTotal.WithLabelValues(string(result)).Inc()
+	m.sqlParseDuration.Observe(dur.Seconds())
+	if truncated {
+		m.sqlParseTruncated.Inc()
+	}
 }
 
 // Registry exposes the underlying registry (for tests / custom gatherers).

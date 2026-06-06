@@ -49,6 +49,28 @@ type RouteInput struct {
 	IsNew bool
 	// ParamMap holds URL + form parameters. Multi-valued params are comma-joined.
 	ParamMap map[string]string
+
+	// --- SQL-aware routing inputs (UC-RTG-04, Phase 9) ---
+	// These are derived from the SQL Body (or preferred from proto-provided
+	// parsed fields when a future gateway populates them). They are only
+	// meaningful when IsNew is true and ParseOK is true; on a parse miss every
+	// slice is empty and ParseOK is false, so rules fall back to header/source.
+
+	// QueryType is the statement keyword, e.g. "SELECT", "INSERT" (upper-case).
+	QueryType string
+	// QueryCategory is the coarse class: READ|WRITE|DDL|DML|EXPLAIN|OTHER.
+	QueryCategory string
+	// Catalogs is the sorted, de-duplicated set of catalogs the query touches.
+	Catalogs []string
+	// Schemas is the sorted, de-duplicated set of schemas the query touches.
+	Schemas []string
+	// CatalogSchemas is the sorted, de-duplicated set of "catalog.schema" pairs.
+	CatalogSchemas []string
+	// Tables is the sorted, de-duplicated set of qualified table references.
+	Tables []string
+	// ParseOK reports whether SQL analysis recognised the statement. False means
+	// rules must fall back to header/source routing.
+	ParseOK bool
 }
 
 // RoutingMethod is the interface every routing provider must implement.

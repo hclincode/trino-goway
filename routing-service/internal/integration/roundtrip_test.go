@@ -15,6 +15,7 @@ import (
 	"net"
 	"os"
 	"testing"
+	"time"
 
 	dto "github.com/prometheus/client_model/go"
 	"go.uber.org/goleak"
@@ -31,6 +32,7 @@ import (
 	scriptprovider "github.com/hclincode/trino-goway-routing-service/internal/engine/providers/script"
 	"github.com/hclincode/trino-goway-routing-service/internal/metrics"
 	"github.com/hclincode/trino-goway-routing-service/internal/server"
+	"github.com/hclincode/trino-goway-routing-service/internal/sqlmeta"
 	pb "github.com/hclincode/trino-goway-routing-service/routerpb"
 )
 
@@ -94,8 +96,20 @@ func startHarness(t *testing.T, cfgYAML string) *harness {
 	}
 
 	pipeline := engine.NewPipeline(methods, cfg.DefaultRoutingGroup, discardLogger())
-	eval := engine.NewPipelineEvaluator(pipeline)
 	mx := metrics.New()
+
+	// Mirror production wiring (cmd/routing-service): inject the SQL analyzer +
+	// metrics observer when SQL parsing is enabled (the default).
+	evalOpts := []engine.EvaluatorOption{}
+	if cfg.SQLParsing.Enabled {
+		evalOpts = append(evalOpts,
+			engine.WithSQLAnalyzer(sqlmeta.NewHeuristic(cfg.SQLParsing.MaxBodyBytes)),
+			engine.WithSQLObserver(func(result string, dur time.Duration, truncated bool) {
+				mx.RecordSQLParse(metrics.SQLParseResult(result), dur, truncated)
+			}),
+		)
+	}
+	eval := engine.NewPipelineEvaluator(pipeline, evalOpts...)
 
 	srv := server.New(cfg, eval, discardLogger(), server.WithMetrics(mx))
 	admin := server.NewAdmin(pipeline, discardLogger())
