@@ -336,7 +336,7 @@ All Phase 8 tests carry `//go:build e2e`, are in `internal/e2e/`, use the `Harne
 
 - [x] `internal/e2e/health_monitoring_e2e_test.go`
 - [x] `TestE2E_Monitor_HealthyBackend` — `TrinoFake` returns `{"starting":false}` on `/v1/info`; after one monitor interval, admin API reports backend `HEALTHY`
-- [x] `TestE2E_Monitor_UnhealthyBackend` — `TrinoFake.SetStarting(true)` → `/v1/info` returns `{"starting":true}`; monitor marks backend `UNHEALTHY`; routing skips it (request falls to other backend)
+- [x] `TestE2E_Monitor_StartingBackendPending` — `TrinoFake.SetStarting(true)` → `/v1/info` returns `{"starting":true}`; monitor marks backend `PENDING` (Java parity, Phase 12; was `UNHEALTHY` pre-Phase-12). The genuine `UNHEALTHY` path is `TestE2E_Monitor_TransportError`
 - [x] `TestE2E_Monitor_TransportError` — backend closed mid-test; `/v1/info` returns connection error; monitor marks `UNHEALTHY` within one probe interval
 - [x] `TestE2E_Monitor_NewlyAddedBackend` — `POST /entity?entityType=GATEWAY_BACKEND`; immediately `GET /webapp/getAllBackends` shows backend with status `PENDING`; after probe interval, status transitions to `HEALTHY`
 - [x] `TestE2E_Monitor_DeactivatedBackend` — `POST /gateway/backend/deactivate/{name}`; backend excluded from routing immediately (no requests reach it); status shown as `UNHEALTHY` in admin API

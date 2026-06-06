@@ -107,9 +107,11 @@ func TestE2E_Monitor_HealthyBackend(t *testing.T) {
 	assert.Equal(t, "HEALTHY", got)
 }
 
-// TestE2E_Monitor_UnhealthyBackend verifies that a backend whose /v1/info
-// reports {"starting":true} is marked UNHEALTHY by the monitor.
-func TestE2E_Monitor_UnhealthyBackend(t *testing.T) {
+// TestE2E_Monitor_StartingBackendPending verifies that a backend whose /v1/info
+// reports {"starting":true} is marked PENDING by the monitor (Java parity, Phase
+// 12). A transport/error backend — the genuine UNHEALTHY path — is covered by
+// TestE2E_Monitor_TransportError below.
+func TestE2E_Monitor_StartingBackendPending(t *testing.T) {
 	h := harness.New(t, harness.WithMonitorInterval(2*time.Second))
 
 	fake := testutil.NewTrinoFake(t)
@@ -117,8 +119,8 @@ func TestE2E_Monitor_UnhealthyBackend(t *testing.T) {
 
 	registerBackend(t, h, "trino-starting", "default", fake.URL)
 
-	got := pollBackendStatus(t, h, "trino-starting", "UNHEALTHY", 10*time.Second)
-	assert.Equal(t, "UNHEALTHY", got)
+	got := pollBackendStatus(t, h, "trino-starting", "PENDING", 10*time.Second)
+	assert.Equal(t, "PENDING", got)
 }
 
 // TestE2E_Monitor_TransportError verifies that a backend pointing to a closed
@@ -195,4 +197,3 @@ func TestE2E_Monitor_DeactivatedBackend(t *testing.T) {
 	assert.Equal(t, http.StatusBadGateway, stmtResp.StatusCode,
 		"POST /v1/statement with no active backends must return 502 (body=%s)", string(body))
 }
-
