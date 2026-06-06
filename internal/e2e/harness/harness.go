@@ -52,6 +52,7 @@ type harnessConfig struct {
 
 	monitorInterval time.Duration
 	monitorTimeout  time.Duration
+	refreshInterval time.Duration
 
 	externalHTTPURL  string
 	externalGRPCAddr string
@@ -117,6 +118,14 @@ func WithCookieSecret(secret string) Option {
 // WithMonitorInterval overrides monitor.interval (default 2s in the harness).
 func WithMonitorInterval(d time.Duration) Option {
 	return func(c *harnessConfig) { c.monitorInterval = d }
+}
+
+// WithBackendRefreshInterval overrides monitor.refreshInterval — how often the
+// gateway reloads the DB backend set into the monitor's probe list (default 1s
+// in the harness; the gateway default is 15s). Tests asserting the DB-refresh
+// reconciliation cadence itself can raise this.
+func WithBackendRefreshInterval(d time.Duration) Option {
+	return func(c *harnessConfig) { c.refreshInterval = d }
 }
 
 // WithMetricsDisabled renders metrics.enabled=false so the /metrics route is not
@@ -228,6 +237,10 @@ func New(t testing.TB, opts ...Option) *Harness {
 		responseSize:    1024 * 1024,
 		monitorInterval: 2 * time.Second,
 		monitorTimeout:  1 * time.Second,
+		// Reload the DB→monitor probe set every second so a backend added via the
+		// admin API after startup is probed promptly (the gateway default is 15s,
+		// which would push add→HEALTHY past the AddBackend deadline).
+		refreshInterval: 1 * time.Second,
 		// Wide-open authorization regexes so the NOOP principal (memberOf == "")
 		// satisfies RequireRole on admin/user endpoints. Tests that exercise
 		// authorization explicitly should override via With{Admin,User}RoleRegex.
@@ -578,6 +591,7 @@ func buildConfig(c *harnessConfig) (string, error) {
 		"ResponseSize":     c.responseSize,
 		"MonitorInterval":  c.monitorInterval,
 		"MonitorTimeout":   c.monitorTimeout,
+		"RefreshInterval":  c.refreshInterval,
 		"ExternalHTTPURL":  c.externalHTTPURL,
 		"ExternalGRPCAddr": c.externalGRPCAddr,
 		"ExternalTimeout":  externalTimeout,
@@ -616,6 +630,7 @@ admin:
 monitor:
   interval: {{.MonitorInterval}}
   checkTimeout: {{.MonitorTimeout}}
+  refreshInterval: {{.RefreshInterval}}
 {{- if .ClusterStatsType}}
   statsTimeout: 10s
   retries: 0

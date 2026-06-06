@@ -137,6 +137,7 @@ routing:
 	assert.Equal(t, 30*time.Second, cfg.Proxy.RequestTimeout.D)
 	assert.Equal(t, 30*time.Second, cfg.Monitor.Interval.D)
 	assert.Equal(t, 5*time.Second, cfg.Monitor.CheckTimeout.D)
+	assert.Equal(t, 15*time.Second, cfg.Monitor.RefreshInterval.D)
 	assert.Equal(t, 1*time.Second, cfg.Routing.External.Timeout.D)
 	assert.Equal(t, 10*time.Minute, cfg.Cookie.TTL.D)
 	assert.True(t, cfg.Cookie.WireCompat)

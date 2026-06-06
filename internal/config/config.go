@@ -136,6 +136,12 @@ type MonitorConfig struct {
 	Interval     Duration `yaml:"interval"`     // default 30s
 	CheckTimeout Duration `yaml:"checkTimeout"` // default 5s
 
+	// RefreshInterval is how often main reloads the active backend list from the
+	// DB into the monitor's probe set (independent of the probe cadence above).
+	// A backend added via the admin API begins being probed on the next refresh,
+	// so lower values shorten the add→HEALTHY latency (UC-MON-03). Default 15s.
+	RefreshInterval Duration `yaml:"refreshInterval"`
+
 	// Cluster-stats knobs (UC-MON-02). Used only by the UI_API/METRICS
 	// collectors; the default INFO_API/NOOP collectors ignore them.
 	StatsTimeout             Duration           `yaml:"statsTimeout"`             // default 10s (Java queryTimeout)
@@ -271,6 +277,7 @@ func defaultConfig() *Config {
 		Monitor: MonitorConfig{
 			Interval:                 Duration{D: 30 * time.Second},
 			CheckTimeout:             Duration{D: 5 * time.Second},
+			RefreshInterval:          Duration{D: 15 * time.Second},
 			StatsTimeout:             Duration{D: 10 * time.Second},
 			Retries:                  0,
 			MetricsEndpoint:          "/metrics",
@@ -324,6 +331,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Monitor.CheckTimeout.D == 0 {
 		cfg.Monitor.CheckTimeout.D = 5 * time.Second
+	}
+	if cfg.Monitor.RefreshInterval.D == 0 {
+		cfg.Monitor.RefreshInterval.D = 15 * time.Second
 	}
 	if cfg.Monitor.StatsTimeout.D == 0 {
 		cfg.Monitor.StatsTimeout.D = 10 * time.Second
@@ -449,6 +459,9 @@ func (c *Config) validateClusterStats() error {
 	// stats collectors, so only an explicitly-negative duration is rejected.
 	if c.Monitor.StatsTimeout.D < 0 {
 		return fmt.Errorf("config: validate: monitor.statsTimeout must be > 0, got %s", c.Monitor.StatsTimeout.D)
+	}
+	if c.Monitor.RefreshInterval.D < 0 {
+		return fmt.Errorf("config: validate: monitor.refreshInterval must be > 0, got %s", c.Monitor.RefreshInterval.D)
 	}
 	if c.Monitor.Retries < 0 {
 		return fmt.Errorf("config: validate: monitor.retries must be >= 0, got %d", c.Monitor.Retries)

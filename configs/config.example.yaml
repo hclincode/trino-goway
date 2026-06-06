@@ -51,6 +51,12 @@ monitor:
   # Per-probe HTTP timeout. Should be well below interval.
   checkTimeout: 5s
 
+  # How often the active backend list is reloaded from the DB into the monitor's
+  # probe set (independent of the probe cadence above). A backend added via the
+  # admin API begins being probed on the next refresh, so lower values shorten the
+  # add->HEALTHY latency (UC-MON-03) at the cost of more DB queries.
+  refreshInterval: 15s
+
   # --- Cluster-stats knobs (UC-MON-02) ---
   # Used only by the UI_API / METRICS cluster-stats collectors below; the default
   # INFO_API (and NOOP) collectors ignore them and issue no extra HTTP.

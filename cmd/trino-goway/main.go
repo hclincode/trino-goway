@@ -34,9 +34,9 @@ import (
 // shutdownTimeout bounds graceful shutdown after SIGTERM/SIGINT.
 const shutdownTimeout = 30 * time.Second
 
-// backendRefreshInterval is how often main reloads the backend list from the DB
-// into the monitor and router. Independent of monitor probe cadence.
-const backendRefreshInterval = 15 * time.Second
+// defaultBackendRefreshInterval is the fallback DB→monitor reload cadence used
+// when monitor.refreshInterval is unset (config.applyDefaults normally fills it).
+const defaultBackendRefreshInterval = 15 * time.Second
 
 // Result labels for backend-refresh metrics.
 const (
@@ -323,7 +323,7 @@ func run(configPath string, log *slog.Logger) error {
 	// goroutine exits when rootCtx is cancelled (signal received).
 	go func() {
 		defer close(refreshDone)
-		runBackendRefresh(rootCtx, backendDAO, mon, persistenceMetrics, log)
+		runBackendRefresh(rootCtx, cfg.Monitor.RefreshInterval.D, backendDAO, mon, persistenceMetrics, log)
 	}()
 
 	startErr := lc.Start(rootCtx)
@@ -365,8 +365,11 @@ func buildAuthMiddleware(ctx context.Context, cfg config.AuthConfig, am auth.Met
 
 // runBackendRefresh periodically reloads backends from the DB and pushes the
 // active set into the monitor so probes follow live configuration.
-func runBackendRefresh(ctx context.Context, dao *persistence.BackendDAO, mon *monitor.Monitor, pm *metrics.PersistenceMetrics, log *slog.Logger) {
-	ticker := time.NewTicker(backendRefreshInterval)
+func runBackendRefresh(ctx context.Context, interval time.Duration, dao *persistence.BackendDAO, mon *monitor.Monitor, pm *metrics.PersistenceMetrics, log *slog.Logger) {
+	if interval <= 0 {
+		interval = defaultBackendRefreshInterval
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
