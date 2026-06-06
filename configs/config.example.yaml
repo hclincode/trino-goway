@@ -51,6 +51,60 @@ monitor:
   # Per-probe HTTP timeout. Should be well below interval.
   checkTimeout: 5s
 
+  # --- Cluster-stats knobs (UC-MON-02) ---
+  # Used only by the UI_API / METRICS cluster-stats collectors below; the default
+  # INFO_API (and NOOP) collectors ignore them and issue no extra HTTP.
+
+  # Per-collection HTTP timeout (Java queryTimeout).
+  statsTimeout: 10s
+
+  # Retries on transport error per stats request (0 = no retry).
+  retries: 0
+
+  # METRICS collector: OpenMetrics endpoint path and the metric names to read.
+  metricsEndpoint: /metrics
+  runningQueriesMetricName: trino_execution_name_QueryManager_RunningQueries
+  queuedQueriesMetricName: trino_execution_name_QueryManager_QueuedQueries
+
+  # METRICS health gating. A backend is UNHEALTHY when any required metric is
+  # absent, below its minimum, or above its maximum. Omit metricMinimumValues to
+  # get the default below; set it to {} to disable the minimum gate entirely.
+  metricMinimumValues:
+    trino_metadata_name_DiscoveryNodeManager_ActiveNodeCount: 1
+  metricMaximumValues: {}
+
+# ---------------------------------------------------------------------------
+# clusterStats — live per-backend queued/running query counts (UC-MON-02 / M7)
+# ---------------------------------------------------------------------------
+clusterStats:
+  # Collector selection. Default INFO_API matches the Java gateway default and
+  # the pre-Phase-12 behavior byte-for-byte: TrinoStatus is set from the health
+  # probe, counts stay 0, no extra outbound HTTP.
+  #   INFO_API  (default) — status only, counts 0, reuses the health verdict.
+  #   NOOP                — zero counts, status UNKNOWN.
+  #   UI_API              — live counts + worker count + per-user queued, via the
+  #                         Trino Web-UI API (requires backendState below).
+  #   METRICS             — live counts + status via the OpenMetrics endpoint
+  #                         (requires backendState below).
+  # JDBC and JMX are NOT supported in v1 (rejected at startup).
+  monitorType: INFO_API
+
+# ---------------------------------------------------------------------------
+# backendState — credentials used by the UI_API / METRICS stats collectors
+# ---------------------------------------------------------------------------
+# Required only when clusterStats.monitorType is UI_API or METRICS. The default
+# INFO_API / NOOP collectors do not read this block.
+backendState:
+  # Username for UI login (UI_API) or stats auth (METRICS).
+  username: ""
+  # Password. When set under METRICS, the collector sends Basic auth; when empty
+  # it sends X-Trino-User instead.
+  password: ""
+  # Whether the backend's UI/metrics endpoint is served over TLS.
+  ssl: false
+  # When true, add "X-Forwarded-Proto: https" to the UI GETs / metrics request.
+  xForwardedProtoHeader: false
+
 # ---------------------------------------------------------------------------
 # db — persistent store for query history and backend registry
 # ---------------------------------------------------------------------------

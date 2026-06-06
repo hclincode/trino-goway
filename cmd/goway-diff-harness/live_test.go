@@ -115,12 +115,24 @@ func loadScenariosOrSkip(t *testing.T, dir string) []*diffharness.Scenario {
 //     can't match. User-scoping is asserted unit-only in internal/admin/admin_test.go.
 //     See the full prose note in the scenario YAML header.
 //
+//   - public-backend-state-clusterstats: CHOICE-B FIELD-VALUE DIVERGENCE (M7).
+//     Both fleets run clusterStatsConfiguration.monitorType INFO_API (Java) / the
+//     INFO_API default (Go), so the ClusterStats field NAMES match (the M7 contract)
+//     and counts are 0 on both. But two object fields diverge by VALUE in ways that
+//     are intentional, documented choices, not regressions: externalUrl (Go fills it
+//     from persistence with a proxyTo fallback per choice b; Java leaves the raw null
+//     when the backend has no externalUrl) and userQueuedCount (Go omits it via
+//     ,omitempty; Java emits explicit null). The 9-field shape + tag exactness is
+//     asserted positively unit-side (internal/admin/backend_test.go golden) and end
+//     to end (internal/e2e/cluster_stats_e2e_test.go). See the scenario YAML header.
+//
 // NOTE: external-routing-headers is deliberately NOT excluded — it passes live as a
 // plain proxy diff (both gateways route to the default group and return the same
 // upstream Trino response). Its externalHeaders-injection path is the part the live
 // fleet can't exercise (F3), and that is covered by internal/proxy/proxy_test.go.
 var liveExcludedScenarios = map[string]bool{
-	"query-history-scoping": true,
+	"query-history-scoping":             true,
+	"public-backend-state-clusterstats": true,
 }
 
 // startGoGateway composes the FULL Go gateway in-process pointed at the supplied

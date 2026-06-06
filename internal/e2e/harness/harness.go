@@ -77,6 +77,14 @@ type harnessConfig struct {
 	propagateErrors bool // sets proxy.propagateErrors
 
 	disableMetrics bool // when true, renders metrics.enabled=false
+
+	// Cluster-stats (UC-MON-02). clusterStatsType is the selected monitor type
+	// ("" => omit the clusterStats block entirely, so the subprocess applies its
+	// INFO_API default and every pre-Phase-12 e2e test is unchanged). The
+	// backendState username/password feed the UI_API/METRICS collectors.
+	clusterStatsType     string
+	backendStateUsername string
+	backendStatePassword string
 }
 
 // WithExternalHTTPRouter wires routing.external.url to the given HTTP endpoint.
@@ -179,6 +187,24 @@ func WithAPIRoleRegex(regex string) Option {
 // errors from the external routing service translate to HTTP 400 to the client.
 func WithPropagateErrors(v bool) Option {
 	return func(c *harnessConfig) { c.propagateErrors = v }
+}
+
+// WithClusterStats selects the cluster-stats monitor type (UC-MON-02) and the
+// backendState credentials the UI_API/METRICS collectors use. monitorType is one
+// of NOOP/INFO_API/UI_API/METRICS; passing "" or "INFO_API" leaves the default
+// path (no stats HTTP, counts 0). For UI_API/METRICS, backendStateUsername must be
+// non-empty (config.Validate requires it); backendStatePassword may be empty (the
+// METRICS collector then authenticates with X-Trino-User instead of Basic).
+//
+// The rendered block also carries the Java-default monitor stats knobs (metric
+// names + the ActiveNodeCount>=1 minimum gate) so a METRICS run resolves its
+// required metrics without per-test wiring.
+func WithClusterStats(monitorType, backendStateUsername, backendStatePassword string) Option {
+	return func(c *harnessConfig) {
+		c.clusterStatsType = monitorType
+		c.backendStateUsername = backendStateUsername
+		c.backendStatePassword = backendStatePassword
+	}
 }
 
 // New builds and starts a trino-goway subprocess against a fresh Postgres
@@ -569,6 +595,9 @@ func buildConfig(c *harnessConfig) (string, error) {
 		"UserRoleRegex":    c.userRoleRegex,
 		"APIRoleRegex":     c.apiRoleRegex,
 		"DisableMetrics":   c.disableMetrics,
+		"ClusterStatsType": c.clusterStatsType,
+		"BackendStateUser": c.backendStateUsername,
+		"BackendStatePass": c.backendStatePassword,
 	}
 	var out bytes.Buffer
 	if err := tmpl.Execute(&out, data); err != nil {
@@ -587,6 +616,15 @@ admin:
 monitor:
   interval: {{.MonitorInterval}}
   checkTimeout: {{.MonitorTimeout}}
+{{- if .ClusterStatsType}}
+  statsTimeout: 10s
+  retries: 0
+  metricsEndpoint: /metrics
+  runningQueriesMetricName: trino_execution_name_QueryManager_RunningQueries
+  queuedQueriesMetricName: trino_execution_name_QueryManager_QueuedQueries
+  metricMinimumValues:
+    trino_metadata_name_DiscoveryNodeManager_ActiveNodeCount: 1
+{{- end}}
 db:
   driver: postgres
   dsn: "{{.DBDSN}}"
@@ -641,5 +679,12 @@ cookie:
 {{- if .DisableMetrics}}
 metrics:
   enabled: false
+{{- end}}
+{{- if .ClusterStatsType}}
+clusterStats:
+  monitorType: {{.ClusterStatsType}}
+backendState:
+  username: "{{.BackendStateUser}}"
+  password: "{{.BackendStatePass}}"
 {{- end}}
 `

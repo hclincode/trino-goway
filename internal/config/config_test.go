@@ -254,6 +254,151 @@ func TestValidate_LDAPMissingURL(t *testing.T) {
 	assert.Contains(t, err.Error(), "auth.ldap.url")
 }
 
+func TestConfig_ClusterStats_DefaultsToInfoAPI(t *testing.T) {
+	t.Parallel()
+	content := `
+routing:
+  type: EXTERNAL
+`
+	path := writeTempFile(t, content)
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "INFO_API", cfg.ClusterStats.MonitorType)
+	// Stats knobs seeded with Java-value defaults.
+	assert.Equal(t, 10*time.Second, cfg.Monitor.StatsTimeout.D)
+	assert.Equal(t, 0, cfg.Monitor.Retries)
+}
+
+func TestConfig_ClusterStats_MetricNameDefaults(t *testing.T) {
+	t.Parallel()
+	content := `
+routing:
+  type: EXTERNAL
+`
+	path := writeTempFile(t, content)
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "/metrics", cfg.Monitor.MetricsEndpoint)
+	assert.Equal(t, "trino_execution_name_QueryManager_RunningQueries", cfg.Monitor.RunningQueriesMetricName)
+	assert.Equal(t, "trino_execution_name_QueryManager_QueuedQueries", cfg.Monitor.QueuedQueriesMetricName)
+	assert.Equal(t, map[string]float64{"trino_metadata_name_DiscoveryNodeManager_ActiveNodeCount": 1}, cfg.Monitor.MetricMinimumValues)
+	assert.Empty(t, cfg.Monitor.MetricMaximumValues)
+}
+
+func TestConfig_ClusterStats_RoundTrip(t *testing.T) {
+	t.Parallel()
+	content := `
+routing:
+  type: EXTERNAL
+clusterStats:
+  monitorType: UI_API
+backendState:
+  username: admin
+  password: secret
+  ssl: true
+  xForwardedProtoHeader: true
+monitor:
+  statsTimeout: 7s
+  retries: 2
+`
+	path := writeTempFile(t, content)
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "UI_API", cfg.ClusterStats.MonitorType)
+	assert.Equal(t, "admin", cfg.BackendState.Username)
+	assert.Equal(t, "secret", cfg.BackendState.Password)
+	assert.True(t, cfg.BackendState.SSL)
+	assert.True(t, cfg.BackendState.XForwardedProtoHeader)
+	assert.Equal(t, 7*time.Second, cfg.Monitor.StatsTimeout.D)
+	assert.Equal(t, 2, cfg.Monitor.Retries)
+}
+
+func TestConfig_ClusterStats_BackendStateRequired(t *testing.T) {
+	t.Parallel()
+	for _, mt := range []string{"UI_API", "METRICS"} {
+		t.Run(mt+"_without_backendState_rejected", func(t *testing.T) {
+			t.Parallel()
+			content := "routing:\n  type: EXTERNAL\nclusterStats:\n  monitorType: " + mt + "\n"
+			path := writeTempFile(t, content)
+			_, err := config.Load(path)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "backendState.username must be non-empty")
+		})
+	}
+	for _, mt := range []string{"INFO_API", "NOOP"} {
+		t.Run(mt+"_without_backendState_accepted", func(t *testing.T) {
+			t.Parallel()
+			content := "routing:\n  type: EXTERNAL\nclusterStats:\n  monitorType: " + mt + "\n"
+			path := writeTempFile(t, content)
+			_, err := config.Load(path)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestConfig_ClusterStats_RejectsJDBC(t *testing.T) {
+	t.Parallel()
+	content := `
+routing:
+  type: EXTERNAL
+clusterStats:
+  monitorType: JDBC
+backendState:
+  username: admin
+`
+	path := writeTempFile(t, content)
+	_, err := config.Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"JDBC" not supported in v1`)
+}
+
+func TestConfig_ClusterStats_RejectsJMX(t *testing.T) {
+	t.Parallel()
+	content := `
+routing:
+  type: EXTERNAL
+clusterStats:
+  monitorType: JMX
+backendState:
+  username: admin
+`
+	path := writeTempFile(t, content)
+	_, err := config.Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"JMX" not supported in v1`)
+}
+
+func TestConfig_ClusterStats_UnknownType(t *testing.T) {
+	t.Parallel()
+	content := `
+routing:
+  type: EXTERNAL
+clusterStats:
+  monitorType: BOGUS
+`
+	path := writeTempFile(t, content)
+	_, err := config.Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "clusterStats.monitorType must be one of")
+}
+
+func TestConfig_ClusterStats_ExplicitEmptyMinimumsPreserved(t *testing.T) {
+	t.Parallel()
+	// An explicit empty map disables the minimum gate and is NOT re-seeded with
+	// the ActiveNodeCount default.
+	content := `
+routing:
+  type: EXTERNAL
+monitor:
+  metricMinimumValues: {}
+`
+	path := writeTempFile(t, content)
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	assert.NotNil(t, cfg.Monitor.MetricMinimumValues)
+	assert.Empty(t, cfg.Monitor.MetricMinimumValues)
+}
+
 // writeTempFile creates a temp file with the given content and registers cleanup.
 func writeTempFile(t *testing.T, content string) string {
 	t.Helper()

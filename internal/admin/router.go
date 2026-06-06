@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/hclincode/trino-goway/internal/auth"
+	"github.com/hclincode/trino-goway/internal/clusterstats"
 	"github.com/hclincode/trino-goway/internal/config"
 	"github.com/hclincode/trino-goway/internal/monitor"
 	"github.com/hclincode/trino-goway/internal/persistence"
@@ -43,6 +44,14 @@ type StatusProvider interface {
 	Status(url string) monitor.TrinoStatus
 }
 
+// StatsProvider is the admin package's interface for live per-backend cluster
+// stats, looked up by backend NAME. Optional on admin.Config: when nil the
+// admin layer serves zero counts (INFO_API parity). Satisfied by
+// *clusterstats.StatsStore.
+type StatsProvider interface {
+	Stats(name string) clusterstats.ClusterStats
+}
+
 // StatusUpdater is the admin package's interface for setting backend health status directly.
 type StatusUpdater interface {
 	SetBackendStatus(url string, status monitor.TrinoStatus)
@@ -65,6 +74,7 @@ type Config struct {
 	History   HistoryStore
 	Monitor   StatusProvider
 	StatusMut StatusUpdater // optional; used by entity upsert
+	Stats     StatsProvider // optional; nil ⇒ counts 0 (INFO_API parity)
 	AuthMW    auth.Middleware
 	Log       *slog.Logger
 	StartTime time.Time // process start time (for DistributionResponse.startTime)

@@ -404,15 +404,26 @@ func TestAdmin_GetPublicBackendState_HappyPath(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	var br admin.BackendResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &br); err != nil {
+	// M7: the public-state endpoint now returns the ClusterStatsResponse shape.
+	var cs admin.ClusterStatsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &cs); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if br.Name != "be-state" {
-		t.Errorf("name: got %q", br.Name)
+	if cs.ClusterID != "be-state" {
+		t.Errorf("clusterId: got %q", cs.ClusterID)
 	}
-	if br.Status != "HEALTHY" {
-		t.Errorf("status: want HEALTHY, got %q", br.Status)
+	if cs.TrinoStatus != "HEALTHY" {
+		t.Errorf("trinoStatus: want HEALTHY, got %q", cs.TrinoStatus)
+	}
+	if cs.ProxyTo != "http://be-state:8080" {
+		t.Errorf("proxyTo: got %q", cs.ProxyTo)
+	}
+	// No StatsProvider configured ⇒ counts 0, userQueuedCount absent.
+	if cs.QueuedQueryCount != 0 || cs.RunningQueryCount != 0 {
+		t.Errorf("counts: want 0/0, got %d/%d", cs.QueuedQueryCount, cs.RunningQueryCount)
+	}
+	if cs.UserQueuedCount != nil {
+		t.Errorf("userQueuedCount: want nil, got %v", cs.UserQueuedCount)
 	}
 }
 

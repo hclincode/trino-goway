@@ -79,15 +79,35 @@ func (ds *DataSize) UnmarshalYAML(value *yaml.Node) error {
 
 // Config is the top-level gateway configuration.
 type Config struct {
-	Proxy   ProxyConfig   `yaml:"proxy"`
-	Admin   AdminConfig   `yaml:"admin"`
-	Monitor MonitorConfig `yaml:"monitor"`
-	DB      DBConfig      `yaml:"db"`
-	Routing RoutingConfig `yaml:"routing"`
-	Auth    AuthConfig    `yaml:"auth"`
-	Cookie  CookieConfig  `yaml:"cookie"`
-	Metrics MetricsConfig `yaml:"metrics"`
-	UI      UIConfig      `yaml:"ui"`
+	Proxy        ProxyConfig        `yaml:"proxy"`
+	Admin        AdminConfig        `yaml:"admin"`
+	Monitor      MonitorConfig      `yaml:"monitor"`
+	DB           DBConfig           `yaml:"db"`
+	Routing      RoutingConfig      `yaml:"routing"`
+	Auth         AuthConfig         `yaml:"auth"`
+	Cookie       CookieConfig       `yaml:"cookie"`
+	Metrics      MetricsConfig      `yaml:"metrics"`
+	UI           UIConfig           `yaml:"ui"`
+	ClusterStats ClusterStatsConfig `yaml:"clusterStats"`
+	BackendState BackendStateConfig `yaml:"backendState"`
+}
+
+// ClusterStatsConfig selects the cluster-stats monitor used to collect live
+// queued/running query counts per backend (UC-MON-02). Mirrors Java's
+// ClusterStatsConfiguration. MonitorType is one of NOOP, INFO_API (default),
+// UI_API, METRICS; JDBC/JMX are rejected by Validate() (not supported in v1).
+type ClusterStatsConfig struct {
+	MonitorType string `yaml:"monitorType"`
+}
+
+// BackendStateConfig holds the credentials and request shaping used by the
+// UI_API and METRICS cluster-stats collectors when querying each backend.
+// Mirrors Java's BackendStateConfiguration.
+type BackendStateConfig struct {
+	Username              string `yaml:"username"`
+	Password              string `yaml:"password"`
+	SSL                   bool   `yaml:"ssl"`
+	XForwardedProtoHeader bool   `yaml:"xForwardedProtoHeader"`
 }
 
 // UIConfig holds web-UI feature flags surfaced by getUIConfiguration.
@@ -115,7 +135,25 @@ type AdminConfig struct {
 type MonitorConfig struct {
 	Interval     Duration `yaml:"interval"`     // default 30s
 	CheckTimeout Duration `yaml:"checkTimeout"` // default 5s
+
+	// Cluster-stats knobs (UC-MON-02). Used only by the UI_API/METRICS
+	// collectors; the default INFO_API/NOOP collectors ignore them.
+	StatsTimeout             Duration           `yaml:"statsTimeout"`             // default 10s (Java queryTimeout)
+	Retries                  int                `yaml:"retries"`                  // default 0
+	MetricsEndpoint          string             `yaml:"metricsEndpoint"`          // default "/metrics"
+	RunningQueriesMetricName string             `yaml:"runningQueriesMetricName"` // default trino_execution_name_QueryManager_RunningQueries
+	QueuedQueriesMetricName  string             `yaml:"queuedQueriesMetricName"`  // default trino_execution_name_QueryManager_QueuedQueries
+	MetricMinimumValues      map[string]float64 `yaml:"metricMinimumValues"`      // default {trino_metadata_name_DiscoveryNodeManager_ActiveNodeCount:1}
+	MetricMaximumValues      map[string]float64 `yaml:"metricMaximumValues"`      // default {}
 }
+
+// Default metric names and threshold keys for the METRICS cluster-stats
+// collector, matching Java's MonitorConfiguration defaults.
+const (
+	defaultRunningQueriesMetricName = "trino_execution_name_QueryManager_RunningQueries"
+	defaultQueuedQueriesMetricName  = "trino_execution_name_QueryManager_QueuedQueries"
+	defaultActiveNodeCountMetric    = "trino_metadata_name_DiscoveryNodeManager_ActiveNodeCount"
+)
 
 // DBConfig holds database connection configuration.
 type DBConfig struct {
@@ -231,8 +269,20 @@ func defaultConfig() *Config {
 			Port: 8090,
 		},
 		Monitor: MonitorConfig{
-			Interval:     Duration{D: 30 * time.Second},
-			CheckTimeout: Duration{D: 5 * time.Second},
+			Interval:                 Duration{D: 30 * time.Second},
+			CheckTimeout:             Duration{D: 5 * time.Second},
+			StatsTimeout:             Duration{D: 10 * time.Second},
+			Retries:                  0,
+			MetricsEndpoint:          "/metrics",
+			RunningQueriesMetricName: defaultRunningQueriesMetricName,
+			QueuedQueriesMetricName:  defaultQueuedQueriesMetricName,
+			// MetricMinimumValues/MetricMaximumValues are intentionally left nil here
+			// and seeded in applyDefaults() only when the YAML omits them, so that an
+			// explicit empty map ({}) survives as a non-nil empty map (disabling the
+			// gate) instead of being overwritten by the merge into a pre-seeded map.
+		},
+		ClusterStats: ClusterStatsConfig{
+			MonitorType: "INFO_API",
 		},
 		Routing: RoutingConfig{
 			Type: "EXTERNAL",
@@ -274,6 +324,31 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Monitor.CheckTimeout.D == 0 {
 		cfg.Monitor.CheckTimeout.D = 5 * time.Second
+	}
+	if cfg.Monitor.StatsTimeout.D == 0 {
+		cfg.Monitor.StatsTimeout.D = 10 * time.Second
+	}
+	if cfg.Monitor.MetricsEndpoint == "" {
+		cfg.Monitor.MetricsEndpoint = "/metrics"
+	}
+	if cfg.Monitor.RunningQueriesMetricName == "" {
+		cfg.Monitor.RunningQueriesMetricName = defaultRunningQueriesMetricName
+	}
+	if cfg.Monitor.QueuedQueriesMetricName == "" {
+		cfg.Monitor.QueuedQueriesMetricName = defaultQueuedQueriesMetricName
+	}
+	// MetricMinimumValues defaults to {ActiveNodeCount:1} via defaultConfig() and
+	// is preserved when the key is omitted. An explicit empty map ({}) in the YAML
+	// replaces the default (non-nil, len 0) and is left untouched here, matching
+	// Java where an explicit empty map disables the minimum gate.
+	if cfg.Monitor.MetricMinimumValues == nil {
+		cfg.Monitor.MetricMinimumValues = map[string]float64{defaultActiveNodeCountMetric: 1}
+	}
+	if cfg.Monitor.MetricMaximumValues == nil {
+		cfg.Monitor.MetricMaximumValues = map[string]float64{}
+	}
+	if cfg.ClusterStats.MonitorType == "" {
+		cfg.ClusterStats.MonitorType = "INFO_API"
 	}
 	if cfg.Proxy.RequestTimeout.D == 0 {
 		cfg.Proxy.RequestTimeout.D = 30 * time.Second
@@ -343,6 +418,40 @@ func (c *Config) Validate() error {
 		if c.Auth.LDAP.UserBase == "" {
 			return fmt.Errorf("config: validate: auth.ldap.userBase must be non-empty when auth.type is LDAP")
 		}
+	}
+	if err := c.validateClusterStats(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateClusterStats checks the cluster-stats monitor selection and its
+// dependent config (UC-MON-02). JDBC/JMX are explicitly rejected as v1-deferred
+// (R8). UI_API/METRICS require backendState.username because they authenticate
+// against each backend.
+func (c *Config) validateClusterStats() error {
+	switch c.ClusterStats.MonitorType {
+	case "", "NOOP", "INFO_API":
+		// Empty is treated as the INFO_API default (applyDefaults seeds it on the
+		// Load path; tolerated here so a directly-constructed Config validates).
+		// No backendState required; these issue no authenticated stats calls.
+	case "UI_API", "METRICS":
+		if c.BackendState.Username == "" {
+			return fmt.Errorf("config: validate: backendState.username must be non-empty when clusterStats.monitorType is %q", c.ClusterStats.MonitorType)
+		}
+	case "JDBC", "JMX":
+		return fmt.Errorf("config: validate: clusterStats.monitorType %q not supported in v1", c.ClusterStats.MonitorType)
+	default:
+		return fmt.Errorf("config: validate: clusterStats.monitorType must be one of NOOP, INFO_API, UI_API, METRICS, got %q", c.ClusterStats.MonitorType)
+	}
+	// statsTimeout is always populated by applyDefaults on the Load path; a zero
+	// value here means a directly-constructed Config that does not exercise the
+	// stats collectors, so only an explicitly-negative duration is rejected.
+	if c.Monitor.StatsTimeout.D < 0 {
+		return fmt.Errorf("config: validate: monitor.statsTimeout must be > 0, got %s", c.Monitor.StatsTimeout.D)
+	}
+	if c.Monitor.Retries < 0 {
+		return fmt.Errorf("config: validate: monitor.retries must be >= 0, got %d", c.Monitor.Retries)
 	}
 	return nil
 }

@@ -3,6 +3,7 @@ package monitor_test
 import (
 	"context"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/hclincode/trino-goway/internal/clusterstats"
 	"github.com/hclincode/trino-goway/internal/config"
 	"github.com/hclincode/trino-goway/internal/monitor"
 	"github.com/hclincode/trino-goway/internal/testutil"
@@ -163,9 +165,16 @@ func TestMonitor_OnFirstTick_NoBackends(t *testing.T) {
 
 // TestSimpleBackend_Accessors verifies GetName and GetURL.
 func TestSimpleBackend_Accessors(t *testing.T) {
-	b := monitor.SimpleBackend{Name: "my-backend", URL: "http://trino:8080"}
+	b := monitor.SimpleBackend{
+		Name:         "my-backend",
+		URL:          "http://trino:8080",
+		ExternalURL:  "https://ext:8443",
+		RoutingGroup: "adhoc",
+	}
 	assert.Equal(t, "my-backend", b.GetName())
 	assert.Equal(t, "http://trino:8080", b.GetURL())
+	assert.Equal(t, "https://ext:8443", b.GetExternalURL())
+	assert.Equal(t, "adhoc", b.GetRoutingGroup())
 }
 
 // TestMonitor_SetBackendStatus verifies the copy-on-write atomic update.
@@ -234,8 +243,8 @@ func TestMonitor_StartingBackend(t *testing.T) {
 	require.NoError(t, m.Start(ctx))
 
 	require.Eventually(t, func() bool {
-		return m.Status(backend.URL) == monitor.StatusUnhealthy
-	}, time.Second, 10*time.Millisecond, "backend reporting starting=true must be marked unhealthy")
+		return m.Status(backend.URL) == monitor.StatusPending
+	}, time.Second, 10*time.Millisecond, "backend reporting starting=true must be marked pending (Java starting→PENDING)")
 }
 
 // TestMonitor_MalformedJSONBackend verifies that a backend returning malformed JSON is marked unhealthy.
@@ -321,4 +330,165 @@ func TestMonitor_CheckOne_MalformedURL(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return m.Status(badURL) == monitor.StatusUnhealthy
 	}, time.Second, 10*time.Millisecond, "malformed URL must be marked unhealthy, not panic")
+}
+
+// ---- Cluster-stats hook (Task 78) ----
+
+// countingCollector records the backends it was asked to collect and returns a
+// ClusterStats keyed by name. It reads the monitor verdict via statusFn so tests
+// can assert the verdict is visible within the same tick (health swap precedes
+// stats collection).
+// statusReader is the subset of *monitor.Monitor the collector reads to mirror
+// the INFO_API/NOOP verdict reuse, declared locally to avoid importing admin.
+type statusReader interface {
+	Status(url string) monitor.TrinoStatus
+}
+
+type countingCollector struct {
+	mu       sync.Mutex
+	calls    map[string]int
+	statusFn statusReader
+}
+
+func newCountingCollector() *countingCollector {
+	return &countingCollector{calls: make(map[string]int)}
+}
+
+func (c *countingCollector) Collect(_ context.Context, b clusterstats.Backend) clusterstats.ClusterStats {
+	c.mu.Lock()
+	c.calls[b.GetName()]++
+	c.mu.Unlock()
+	cs := clusterstats.ClusterStats{
+		ClusterID:    b.GetName(),
+		ProxyTo:      b.GetURL(),
+		ExternalURL:  b.GetExternalURL(),
+		RoutingGroup: b.GetRoutingGroup(),
+	}
+	if c.statusFn != nil {
+		cs.TrinoStatus = c.statusFn.Status(b.GetURL())
+	}
+	return cs
+}
+
+func (c *countingCollector) callCount(name string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls[name]
+}
+
+// captureObserver records the latest stats snapshot handed to ObserveStats.
+type captureObserver struct {
+	mu    sync.Mutex
+	last  map[string]clusterstats.ClusterStats
+	count int
+}
+
+func (o *captureObserver) ObserveStats(snap map[string]clusterstats.ClusterStats) {
+	o.mu.Lock()
+	o.last = snap
+	o.count++
+	o.mu.Unlock()
+}
+
+func (o *captureObserver) snapshot() map[string]clusterstats.ClusterStats {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.last
+}
+
+// TestMonitor_StatsCollectorRunsPerTick verifies the collector is invoked once
+// per backend per tick and the observer receives a name-keyed snapshot whose
+// status reflects this tick's health verdict.
+func TestMonitor_StatsCollectorRunsPerTick(t *testing.T) {
+	backend := testutil.NewFakeBackend(t) // healthy
+	m := newTestMonitor(t)
+	m.SetBackends([]monitor.Backend{monitor.SimpleBackend{Name: "b1", URL: backend.URL, RoutingGroup: "adhoc"}})
+
+	collector := newCountingCollector()
+	collector.statusFn = m
+	obs := &captureObserver{}
+	m.SetClusterStatsCollector(collector)
+	m.SetStatsObserver(obs)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer stopCancel()
+		require.NoError(t, m.Stop(stopCtx))
+	})
+	require.NoError(t, m.Start(ctx))
+
+	require.Eventually(t, func() bool {
+		return collector.callCount("b1") >= 1
+	}, time.Second, 10*time.Millisecond, "collector must be called for the backend")
+
+	snap := obs.snapshot()
+	require.NotNil(t, snap)
+	cs, ok := snap["b1"]
+	require.True(t, ok, "snapshot keyed by NAME")
+	assert.Equal(t, "b1", cs.ClusterID)
+	assert.Equal(t, "adhoc", cs.RoutingGroup)
+	// Health swap precedes stats collection, so the verdict is visible this tick.
+	assert.Equal(t, monitor.StatusHealthy, cs.TrinoStatus)
+}
+
+// TestMonitor_NilStatsHook_NoPanic verifies a nil collector or observer disables
+// stats collection without panicking and without affecting health.
+func TestMonitor_NilStatsHook_NoPanic(t *testing.T) {
+	backend := testutil.NewFakeBackend(t)
+	m := newTestMonitor(t)
+	m.SetBackends([]monitor.Backend{monitor.SimpleBackend{Name: "b1", URL: backend.URL}})
+
+	// Observer set but collector nil ⇒ no stats call.
+	obs := &captureObserver{}
+	m.SetStatsObserver(obs)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer stopCancel()
+		require.NoError(t, m.Stop(stopCtx))
+	})
+	require.NoError(t, m.Start(ctx))
+
+	require.Eventually(t, func() bool {
+		return m.Status(backend.URL) == monitor.StatusHealthy
+	}, time.Second, 10*time.Millisecond, "health must still work with nil collector")
+
+	time.Sleep(50 * time.Millisecond)
+	obs.mu.Lock()
+	count := obs.count
+	obs.mu.Unlock()
+	assert.Equal(t, 0, count, "observer must not be called when collector is nil")
+}
+
+// TestMonitor_ReadinessNotGatedByStats verifies OnFirstTick (readiness) fires on
+// the first tick regardless of the stats collector running.
+func TestMonitor_ReadinessNotGatedByStats(t *testing.T) {
+	backend := testutil.NewFakeBackend(t)
+	m := newTestMonitor(t)
+	m.SetBackends([]monitor.Backend{monitor.SimpleBackend{Name: "b1", URL: backend.URL}})
+
+	collector := newCountingCollector()
+	collector.statusFn = m
+	m.SetClusterStatsCollector(collector)
+	m.SetStatsObserver(&captureObserver{})
+
+	var ready int32
+	m.SetOnFirstTick(func() { atomic.AddInt32(&ready, 1) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer stopCancel()
+		require.NoError(t, m.Stop(stopCtx))
+	})
+	require.NoError(t, m.Start(ctx))
+
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&ready) == 1
+	}, time.Second, 10*time.Millisecond, "readiness must flip on first tick regardless of stats")
 }

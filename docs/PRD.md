@@ -78,6 +78,7 @@ A production-ready reference external router ships in this repo at [`routing-ser
 - External routing selector (HTTP API + gRPC)
 - QueryId sticky-routing with 3-step cache-miss recovery chain
 - Cluster health monitoring and backend registry
+- Live cluster stats (UC-MON-02 / M7) — config-selectable collector (`INFO_API` default / `NOOP` / `UI_API` / `METRICS`) feeding live queued/running counts into the `getAllBackends` UI table and the M7 `ClusterStats` public backend-state endpoint (`GET /api/public/backends/{name}/state`). Implemented in Phase 12. Includes the `INFO_API` correction that `{"starting": true}` maps to `PENDING` (matching Java) rather than the prior `UNHEALTHY`.
 - Query history persistence (Postgres + MySQL)
 - Auth: OAuth2 (OIDC) + LDAP + noop
 - Gateway cookies (HMAC-SHA256, wire-compatible with Java `GatewayCookie`; `TG.OAUTH2` cookie for OAuth2 flow stickiness; `wireCompat: true` default for blue/green)
@@ -163,7 +164,7 @@ Run the Go gateway in shadow-traffic mode alongside Java, logging its routing de
 4. **3-step cache-miss recovery chain.** History lookup → fan-out HEAD probe → first-active-default fallback. Simplifying causes cross-cluster query duplication.
 5. **Document `http-server.process-forwarded=true` prominently.** It is the reason `nextUri` works and the Java docs bury it.
 6. **`KILL QUERY` regex routing.** `KILL\s+QUERY\s+'(\d+_\d+_\d+_\w+)'` on POST bodies must route to the cluster running the query, not the rule-selected cluster.
-7. **Three separate `*http.Client` instances.** Proxy, monitor, and external-routing clients must never share a pool. `proxyClient` and `monitorClient` set `CheckRedirect: ErrUseLastResponse`; `routerClient` follows redirects. Pool isolation prevents backpressure on one path starving the others.
+7. **Separate `*http.Client` instances per concern.** Proxy, monitor, and external-routing clients must never share a pool. `proxyClient` and `monitorClient` set `CheckRedirect: ErrUseLastResponse`; `routerClient` follows redirects. A 4th `statsClient` is added for cluster-stats collection but only when `clusterStats.monitorType` ∈ {`UI_API`, `METRICS`} — the default `INFO_API`/`NOOP` path keeps three live pools and issues no stats HTTP. The `UI_API` cookie jar lives inside the collector, not on the shared transport. Pool isolation prevents backpressure on one path starving the others.
 
 ---
 

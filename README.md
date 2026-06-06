@@ -236,6 +236,39 @@ scrape_configs:
 > There is no error returned; queries simply stop routing through the gateway after the first
 > response.
 
+### Live cluster stats
+
+The gateway can report **live queued/running query counts** (plus worker-node count and a
+per-user queued breakdown) per backend. The collector is selected by `clusterStats.monitorType`
+and rides the existing health-monitor tick — there is no second scheduler. Four types:
+
+| Type | Outbound HTTP | What it reports |
+| --- | --- | --- |
+| `INFO_API` *(default)* | none — reuses the `/v1/info` health verdict | `trinoStatus` only; counts 0 |
+| `NOOP` | none | counts 0, status `UNKNOWN` |
+| `UI_API` | Trino Web-UI API | live running/queued, `numWorkerNodes`, per-user `userQueuedCount` |
+| `METRICS` | OpenMetrics endpoint | live running/queued + a threshold-gated status |
+
+`JDBC` and `JMX` are not supported in v1 and are rejected at startup.
+
+The default `INFO_API` issues **no extra outbound HTTP** and reports counts of 0 — byte-for-byte
+identical to the Java gateway's default and to trino-goway's prior behavior. `UI_API` and
+`METRICS` authenticate against each backend using the `backendState:` credentials and run on a
+**dedicated 4th `*http.Client`** (`statsClient`), constructed only for those two types so the
+default path keeps three HTTP pools (proxy / monitor / router). The `UI_API` session cookie jar
+lives inside the collector, not on the shared transport.
+
+Counts surface in two places, both fed from the same per-tick stats store:
+
+- `GET /api/public/backends/{name}/state` returns the **M7 `ClusterStats` wire shape** —
+  `{clusterId, runningQueryCount, queuedQueryCount, numWorkerNodes, trinoStatus, proxyTo,
+  externalUrl, routingGroup, userQueuedCount}`. Under `INFO_API` the counts are 0 and the
+  persistence-derived fields (`proxyTo`/`externalUrl`/`routingGroup`) are still populated.
+- The web-UI `getAllBackends` table's queued/running columns.
+
+See the `monitor:` stats knobs and the `clusterStats:` / `backendState:` blocks in
+[configs/config.example.yaml](configs/config.example.yaml).
+
 ---
 
 ## Development tools

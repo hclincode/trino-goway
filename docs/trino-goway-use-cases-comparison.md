@@ -30,18 +30,19 @@ missing or stubbed (❌, or ⚠️ where a real sub-feature is absent).
 |---|---|---|---|---|
 | A. Proxy / protocol (PXY) | 12 | 9 | 3 | 0 |
 | B. Routing (RTG) | 9 | 5 | 1 | 3 |
-| C. Monitoring & lifecycle (MON) | 10 | 9 | 0 | 1 |
-| D. Admin / management API (ADM) | 26 | 18 | 8 | 0 |
+| C. Monitoring & lifecycle (MON) | 10 | 10 | 0 | 0 |
+| D. Admin / management API (ADM) | 26 | 21 | 5 | 0 |
 | E. Auth & authz (AUTH) | 12 | 9 | 3 | 0 |
 | F. Web UI (UI) | 9 | 6 | 2 | 1 |
 | G. Observability (OBS) | 3 | 3 | 0 | 0 |
-| **Total** | **81** | **59** | **17** | **5** |
+| **Total** | **81** | **63** | **14** | **4** |
 
 **Headline:** the Trino-protocol proxy, routing-group resolution, health monitoring,
-lifecycle, persistence, the full admin/management API surface, regex authz, OIDC, and the
-Web-UI backend are all present and compatible. The five hard gaps are all **intentional
-architecture decisions**: no internal MVEL rules engine, no SQL parser, no live queued/running
-cluster stats (goway delegates routing to an external service and keeps the proxy thin).
+lifecycle, persistence, live queued/running cluster stats (UC-MON-02 / M7), the full
+admin/management API surface, regex authz, OIDC, and the Web-UI backend are all present and
+compatible. The four hard gaps are all **intentional architecture decisions**: no internal
+MVEL rules engine, no SQL parser, no internal routing-rules CRUD/editor (goway delegates
+routing to an external service and keeps the proxy thin).
 
 ---
 
@@ -79,7 +80,7 @@ cluster stats (goway delegates routing to an external service and keeps the prox
 ## C. Backend health, config & lifecycle — `UC-MON-*`
 
 - [x] **UC-MON-01** Active health probes — ✅ `/v1/info`, `200 {"starting":false}` ⇒ HEALTHY. `internal/monitor/monitor.go`. E2E `health_monitoring_e2e_test.go`.
-- [ ] **UC-MON-02** Live queued/running cluster stats — ❌ **not collected.** `BackendResponse.queued`/`running` are always `0` (`internal/admin/backend.go:58`); only health `status` is live. *Gap:* Java's `ClusterStatsMonitor` query-count collection is not ported.
+- [x] **UC-MON-02** Live queued/running cluster stats — ✅ live queued/running via a config-selectable collector (INFO_API default / UI_API / METRICS; JDBC/JMX v1-deferred). `internal/clusterstats/`. E2E `TestE2E_ClusterStats_*`.
 - [x] **UC-MON-03** Hot backend list reload — ✅ 15s DB refresher → monitor. `cmd/trino-goway/main.go`. E2E `TestE2E_Monitor_NewlyAddedBackend`.
 - [x] **UC-MON-04** Liveness probe — ✅ `/trino-gateway/livez` → `200 ok`. `internal/admin/health.go`.
 - [x] **UC-MON-05** Readiness probe — ✅ `503` until first probe cycle, then `200` (Hard Invariant #11). *(Minor: body text `not ready` vs Java `Trino Gateway is still initializing`.)* E2E `probes_e2e_test.go`.
@@ -106,8 +107,8 @@ cluster stats (goway delegates routing to an external service and keeps the prox
 - [ ] **UC-ADM-11** List entities — ⚠️ `GET /entity/{type}`: unknown type returns **`200 []`** (goway, per USE_STORIES §4.2) vs Java **`500`**. `backend.go:332`.
 - [x] **UC-ADM-12** Public list backends — ✅ `backend.go:116`.
 - [x] **UC-ADM-13** Public get backend (404 on miss) — ✅ `backend.go:132`.
-- [ ] **UC-ADM-14** Public backend state — ⚠️ returns a `BackendResponse` (`{…,queued,running,status}`) not Java's `ClusterStats` (`{trinoStatus,queuedQueryCount,runningQueryCount}`) (M7), and `queued`/`running` are `0`. `backend.go:151`.
-- [ ] **UC-ADM-15** `getAllBackends` + stats — ⚠️ live `status` ✅; `queued`/`running` always `0` (see MON-02). `webapp.go:83`.
+- [x] **UC-ADM-14** Public backend state — ✅ returns `ClusterStatsResponse` (`{clusterId,runningQueryCount,queuedQueryCount,numWorkerNodes,trinoStatus,proxyTo,externalUrl,routingGroup,userQueuedCount}`) — M7 closed; counts live under UI_API/METRICS, `0` under INFO_API; unobserved default populated from persistence (choice b). `backend.go::getPublicBackendState`. E2E `TestE2E_ClusterStats_InfoAPI_PublicStateShape`.
+- [x] **UC-ADM-15** `getAllBackends` + stats — ✅ live `status`; `queued`/`running` now flow from the stats store (live under UI_API/METRICS; `0` under INFO_API default). `webapp.go`. E2E `TestE2E_ClusterStats_*`.
 - [x] **UC-ADM-16** `saveBackend` — ✅ `Result<ProxyBackend>`. `webapp.go:310`.
 - [x] **UC-ADM-17** `updateBackend` — ✅ `webapp.go:327`.
 - [x] **UC-ADM-18** `deleteBackend` (full object, name only) — ✅ `Result<bool>`. `webapp.go:344`.
@@ -148,7 +149,7 @@ cluster stats (goway delegates routing to an external service and keeps the prox
 - [x] **UC-UI-02** Serve static assets — ✅ **implemented (Task 65)**, content-hashed + traversal-guarded (was MISSING in the old study). `router.go:303`.
 - [x] **UC-UI-03** Serve logo — ✅ (embedded bundle, placeholder fallback). `router.go:289`.
 - [x] **UC-UI-04** Root redirect — ✅ `303 → /trino-gateway`. `router.go:145`.
-- [x] **UC-UI-05** Dashboard — ✅ backend supports it (`getDistribution`/`getAllBackends`); ⚠️ queued/running tiles read `0` (MON-02).
+- [x] **UC-UI-05** Dashboard — ✅ backend supports it (`getDistribution`/`getAllBackends`); queued/running tiles are live under the UI_API/METRICS collectors (`0` under the INFO_API default).
 - [x] **UC-UI-06** Clusters page — ✅ full CRUD via admin API.
 - [x] **UC-UI-07** Query history page — ✅ deep-links resolve via `externalUrl` (ADM-25).
 - [ ] **UC-UI-08** Routing-rules editor — ❌ hidden (204 from `getRoutingRules`); no internal rules (RTG-01/02).
@@ -187,26 +188,52 @@ function; the diff harness handles them via justified `IgnoreBodyFields` where n
 | M1 | `findQueryHistory` body | `{user, externalUrl, size}` | `{userName, backendUrl, pageSize}` | ADM-24 |
 | M3 | `getRoutingRules` / `getUIConfiguration` verb | `GET` | `POST` | ADM-20, RTG-02 |
 | M4 | `getDistribution.startTime` | `…+00:00` | `…Z` | ADM-19 |
-| M7 | `/api/public/backends/{name}/state` | `ClusterStats` | `BackendResponse` | ADM-14 |
 | M8 | `POST /entity` success body | empty | echoes `ProxyBackend` | ADM-10 |
 | M9 | `readyz` startup body | `Trino Gateway is still initializing` | `not ready` | MON-05 |
-| — | `queued`/`running` counts | live | always `0` | MON-02, ADM-14/15 |
 | — | `/entity/{unknown}` | `500` | `200 []` | ADM-11 |
 | — | NOOP role grant | all roles | none unless regex matches | AUTH-01 |
 
 > Previously-flagged gaps now **closed** in goway: M2 (`disablePages` added), M5
 > (`QueryDetail.externalUrl` populated), M6 (`ProxyBackend.externalUrl` always emitted),
-> assets/SPA serving, `/sso` + `/oidc/callback`, `/userinfo` permissions.
+> **M7 (`/api/public/backends/{name}/state` now returns the `ClusterStats` 9-field shape)
+> and the `queued`/`running` always-`0` gap (counts live under UI_API/METRICS, `0` under
+> the INFO_API default — UC-MON-02 / ADM-14 / ADM-15)**, assets/SPA serving, `/sso` +
+> `/oidc/callback`, `/userinfo` permissions. See *Cluster-stats divergences* below for the
+> two intentional Phase 12 behavioral divergences.
+
+### Cluster-stats divergences (Phase 12 — UC-MON-02 / M7)
+
+The M7 row and the "queued/running always 0" row above are **closed** in Phase 12: the
+public backend-state endpoint now returns the `ClusterStats` 9-field shape and counts are
+live under the `UI_API`/`METRICS` collectors (0 under the `INFO_API` default, which matches
+the Java default byte-for-byte). Two **intentional** behavioral divergences from Java are
+recorded here so they are not later mistaken for accidental gaps:
+
+- **Unobserved-default object populated from persistence (not Java's null).** For a backend
+  that has not been collected yet (or under `INFO_API`/`NOOP`), the store returns zero counts,
+  but at the M7 admin boundary the handler fills `proxyTo`/`externalUrl`/`routingGroup` from
+  the persistence row (reusing `externalURLOrProxyTo`) rather than emitting Java's raw null —
+  matching the existing Go convention where `proxyBackendFromPersistence` already populates
+  `externalUrl` where Java leaves it null. `userQueuedCount` stays null (omitted from JSON)
+  until a `UI_API` collection fills it. Also, `trinoStatus` uses the shared
+  `internal/clusterstatus` enum with a new `UNKNOWN` member, so an unprobed backend reports
+  `UNKNOWN` (the admin label no longer collapses Unknown→`PENDING`).
+
+- **One UI_API session reused across ticks (vs Java's fresh-login-per-GET).** Java's
+  `ClusterStatsHttpMonitor` re-runs `POST /ui/login` before every `/ui/api/stats` and
+  `/ui/api/query` GET. trino-goway's `UI_API` collector logs in once, holds the session cookie
+  in a per-collector jar, and reuses it across probe ticks (re-logging in only after a `401`).
+  This is a deliberate optimization — fewer logins, same observable counts — and is not a
+  protocol incompatibility.
 
 ---
 
-## Intentional non-goals (the 5 ❌)
+## Intentional non-goals (the 4 ❌)
 
 | UC | Capability | Why absent in goway |
 |---|---|---|
 | RTG-01 | Internal MVEL rules engine | Routing policy delegated to an external service (HTTP/gRPC) + reference `routing-service`. |
 | RTG-02 | Internal routing-rules CRUD/editor | Follows from RTG-01; `getRoutingRules` returns 204 ("external routing in use"). |
 | RTG-04 | SQL-parser-derived routing inputs | No `trino-parser` port in v1; `trinoQueryProperties` parser fields empty. |
-| MON-02 | Live queued/running cluster stats | Cluster-stats query-count collection not ported; only health status is live. |
 | UI-08 | Routing-rules editor page | Follows from RTG-01/02 (editor hidden under external routing). |
 </content>

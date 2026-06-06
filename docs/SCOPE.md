@@ -24,6 +24,7 @@
 | Web UI | Serve existing Java-compiled static bundle unchanged; embed compiled `webapp/` assets via `//go:embed`; no UI rewrite |
 | Config migration tool — `goway-migrate-config` | One-shot binary: Java YAML → Go YAML; config compat is loose, not strict |
 | Prometheus metrics endpoint | OpenMetrics exposition on the admin listener (configurable via `metrics.{enabled,path}`), covering Go runtime/process, HTTP server, proxy/forwarding, backend health/activation, routing/recovery-chain, and auth/persistence metrics under the `trino_goway_*` namespace; dedicated registry (no global default). Added per team-lead §5 sign-off — see §5 changelog |
+| Live queued/running cluster stats (UC-MON-02 / M7) | Config-selectable cluster-stats collector (`clusterStats.monitorType` ∈ `INFO_API` default / `NOOP` / `UI_API` / `METRICS`), riding the health-monitor tick into a name-keyed stats store. Surfaces live counts in the web-UI `getAllBackends` table and the M7 public backend-state endpoint (`GET /api/public/backends/{name}/state` now returns the `ClusterStats` 9-field wire shape, UC-ADM-14). `INFO_API`/`NOOP` issue no extra HTTP; `UI_API`/`METRICS` use a dedicated 4th `statsClient`. **Intentional divergences from Java:** (a) `TrinoStatus` is a shared `internal/clusterstatus` leaf enum with a new `UNKNOWN` member (admin label no longer collapses Unknown→PENDING); (b) the not-yet-collected default object is populated from the persistence row (`proxyTo`/`externalUrl`/`routingGroup`) rather than Java's raw null, matching the existing `proxyBackendFromPersistence` convention — `userQueuedCount` stays null until a `UI_API` collection fills it. Gap-closure (health monitoring + backend registry already locked in above; M7 is an explicit UC-ADM-14 gap), so no §5 sign-off required. |
 
 ---
 
@@ -77,6 +78,12 @@
 **What it is:** Each routing group gets its own database connection pool (`JdbcConnectionManager.getJdbi(routingGroupDatabase)` pattern from Java).  
 **Why excluded:** No confirmed operator use was found during the study phase. Adds connection-pool management complexity with no known beneficiary.  
 **Promotion condition:** At least one operator confirms active reliance on this isolation; team lead approves the connection pool design.
+
+### Cluster-stats monitor types JDBC / JMX (v1-deferred)
+
+**What it is:** Two additional `clusterStats.monitorType` values from the Java gateway — `JDBC` (counts via a Trino JDBC session) and `JMX` (counts via the coordinator's JMX HTTP bridge).  
+**Why excluded:** Heavier than the HTTP-shaped `UI_API`/`METRICS` collectors that ship in v1 (JDBC pulls in a driver/session lifecycle; JMX needs the JMX bridge wiring) for a narrow operator base. `Validate()` rejects both with an explicit "not supported in v1" error, and the collector selector only switches over `NOOP`/`INFO_API`/`UI_API`/`METRICS` (defense-in-depth). See Phase 12 ruling R8. This is part of the UC-MON-02 / M7 gap-closure (the surrounding capability is already locked in §1), so it does not require §5 sign-off.  
+**Promotion condition:** Operator demand for JDBC/JMX cluster-stats collection is documented; team lead approves the additional collector lifecycle.
 
 ---
 

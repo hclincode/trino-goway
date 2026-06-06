@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hclincode/trino-goway/internal/clusterstats"
 	"github.com/hclincode/trino-goway/internal/monitor"
 	"github.com/hclincode/trino-goway/internal/persistence"
 )
@@ -29,6 +30,45 @@ type BackendResponse struct {
 	Queued  int    `json:"queued"`
 	Running int    `json:"running"`
 	Status  string `json:"status"` // "HEALTHY", "UNHEALTHY", "PENDING"
+}
+
+// ClusterStatsResponse is the M7 public backend-state wire shape, matching Java's
+// ClusterStats record field names exactly. Emitted by GET
+// /api/public/backends/{name}/state (UC-ADM-14).
+//
+// userQueuedCount carries ,omitempty so an uncollected backend (UI_API not in
+// use, or not-yet-collected) emits null/absent rather than {}, matching Java's
+// null default (choice b).
+type ClusterStatsResponse struct {
+	ClusterID         string         `json:"clusterId"`
+	RunningQueryCount int            `json:"runningQueryCount"`
+	QueuedQueryCount  int            `json:"queuedQueryCount"`
+	NumWorkerNodes    int            `json:"numWorkerNodes"`
+	TrinoStatus       string         `json:"trinoStatus"`
+	ProxyTo           string         `json:"proxyTo"`
+	ExternalURL       string         `json:"externalUrl"`
+	RoutingGroup      string         `json:"routingGroup"`
+	UserQueuedCount   map[string]int `json:"userQueuedCount,omitempty"`
+}
+
+// clusterStatsResponseFromPersistence maps a persistence.Backend plus a collected
+// ClusterStats to the M7 wire shape. Counts/worker-count/per-user breakdown come
+// from cs; trinoStatus comes from the live monitor verdict; proxyTo/externalUrl/
+// routingGroup are populated from persistence (choice b) — even for an
+// uncollected backend whose cs carries empty identity fields.
+func (a *Admin) clusterStatsResponseFromPersistence(b persistence.Backend, cs clusterstats.ClusterStats) ClusterStatsResponse {
+	status := a.cfg.Monitor.Status(b.URL)
+	return ClusterStatsResponse{
+		ClusterID:         b.Name,
+		RunningQueryCount: cs.RunningQueryCount,
+		QueuedQueryCount:  cs.QueuedQueryCount,
+		NumWorkerNodes:    cs.NumWorkerNodes,
+		TrinoStatus:       trinoStatusLabel(status),
+		ProxyTo:           b.URL,
+		ExternalURL:       externalURLOrProxyTo(b.ExternalURL, b.URL),
+		RoutingGroup:      b.RoutingGroup,
+		UserQueuedCount:   cs.UserQueuedCount,
+	}
 }
 
 // proxyBackendFromPersistence maps a persistence.Backend to a ProxyBackend.
@@ -54,27 +94,28 @@ func externalURLOrProxyTo(externalURL, proxyTo string) string {
 	return externalURL
 }
 
-// backendResponseFromPersistence maps a persistence.Backend to a BackendResponse with live status.
+// backendResponseFromPersistence maps a persistence.Backend to a BackendResponse
+// with live status and live queued/running counts. Counts come from the stats
+// store keyed by backend NAME when a StatsProvider is configured; otherwise they
+// are 0 (INFO_API parity).
 func (a *Admin) backendResponseFromPersistence(b persistence.Backend) BackendResponse {
 	status := a.cfg.Monitor.Status(b.URL)
-	return BackendResponse{
+	resp := BackendResponse{
 		ProxyBackend: proxyBackendFromPersistence(b),
 		Status:       trinoStatusLabel(status),
 	}
+	if a.cfg.Stats != nil {
+		cs := a.cfg.Stats.Stats(b.Name)
+		resp.Queued = cs.QueuedQueryCount
+		resp.Running = cs.RunningQueryCount
+	}
+	return resp
 }
 
-// trinoStatusLabel converts a TrinoStatus to the wire string.
+// trinoStatusLabel converts a TrinoStatus to the admin wire string, delegating to
+// the shared enum so Unknown maps to "UNKNOWN" (no longer collapsed to PENDING).
 func trinoStatusLabel(s monitor.TrinoStatus) string {
-	switch s {
-	case monitor.StatusHealthy:
-		return "HEALTHY"
-	case monitor.StatusUnhealthy:
-		return "UNHEALTHY"
-	case monitor.StatusPending:
-		return "PENDING"
-	default:
-		return "PENDING"
-	}
+	return s.Label()
 }
 
 // persistenceBackendFromProxy maps a ProxyBackend to a persistence.Backend, preserving timestamps.
@@ -146,7 +187,10 @@ func (a *Admin) getPublicBackend(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
-// getPublicBackendState returns the live status of a backend.
+// getPublicBackendState returns the M7 ClusterStats wire shape for a backend
+// (UC-ADM-14). Counts are live under UI_API/METRICS collectors and 0 under
+// INFO_API; proxyTo/externalUrl/routingGroup are always populated from
+// persistence, even for a not-yet-collected backend (choice b). 404 on missing.
 // GET /api/public/backends/{name}/state
 func (a *Admin) getPublicBackendState(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
@@ -158,7 +202,11 @@ func (a *Admin) getPublicBackendState(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, b := range backends {
 		if b.Name == name {
-			resp := a.backendResponseFromPersistence(b)
+			var cs clusterstats.ClusterStats
+			if a.cfg.Stats != nil {
+				cs = a.cfg.Stats.Stats(b.Name)
+			}
+			resp := a.clusterStatsResponseFromPersistence(b, cs)
 			writeJSON(w, http.StatusOK, resp)
 			return
 		}

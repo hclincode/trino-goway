@@ -14,8 +14,14 @@ import (
 	"time"
 )
 
+// uiCookieName is the session cookie the fake sets on a successful /ui/login and
+// requires on the authenticated UI stats/query GETs.
+const uiCookieName = "Trino-UI-Token"
+
 // TrinoFake is a richer fake Trino backend that handles the full statement protocol
-// including sticky-routing GETs, HEAD probes, and KILL QUERY (DELETE) requests.
+// including sticky-routing GETs, HEAD probes, and KILL QUERY (DELETE) requests, plus
+// the cluster-stats surfaces (UI form-login + /ui/api/stats + /ui/api/query and the
+// OpenMetrics /metrics endpoint) used by the UC-MON-02 collectors.
 type TrinoFake struct {
 	// URL is the base URL of the fake Trino server.
 	URL string
@@ -31,6 +37,28 @@ type TrinoFake struct {
 	headProbes     map[string]int
 	cancellations  []string
 	starting       bool
+
+	// Cluster-stats surfaces (Phase 12 / UC-MON-02). All zero-valued by
+	// default so existing callers see no UI/metrics behavior (INFO_API parity):
+	// an unconfigured UI login rejects every credential and the /metrics body
+	// is empty.
+	uiUsername    string
+	uiPassword    string
+	uiCredsSet    bool
+	activeWorkers int
+	runningQ      int
+	queuedQ       int
+	queuedByUser  map[string]int
+	metricsBody   string
+	metricsPath   string // defaults to "/metrics" when empty
+
+	loginCount      int
+	uiStatsHits     int
+	uiQueryHits     int
+	metricsHits     int
+	lastForwardedTo string // last X-Forwarded-Proto seen on a UI stats/query GET
+	lastBasicUser   string // last Basic-auth user seen on a /metrics GET
+	lastTrinoUser   string // last X-Trino-User seen on a /metrics GET
 }
 
 // NewTrinoFake creates a fake Trino backend httptest.Server with the full statement
@@ -44,6 +72,7 @@ func NewTrinoFake(t testing.TB) *TrinoFake {
 		requestHeaders: make(map[string]http.Header),
 		hitCount:       make(map[string]int),
 		headProbes:     make(map[string]int),
+		queuedByUser:   make(map[string]int),
 	}
 
 	mux := http.NewServeMux()
@@ -111,6 +140,95 @@ func (f *TrinoFake) SetStarting(v bool) {
 	f.mu.Unlock()
 }
 
+// SetUICredentials registers the username/password that /ui/login accepts. Until this
+// is called every login is rejected, so the default fake exposes no UI stats surface.
+func (f *TrinoFake) SetUICredentials(username, password string) {
+	f.mu.Lock()
+	f.uiUsername = username
+	f.uiPassword = password
+	f.uiCredsSet = true
+	f.mu.Unlock()
+}
+
+// SetUIStats sets the cluster-level counts returned by GET /ui/api/stats.
+func (f *TrinoFake) SetUIStats(activeWorkers, running, queued int) {
+	f.mu.Lock()
+	f.activeWorkers = activeWorkers
+	f.runningQ = running
+	f.queuedQ = queued
+	f.mu.Unlock()
+}
+
+// SetQueuedQueries sets the per-user queued-query counts. GET /ui/api/query?state=QUEUED
+// returns one entry per query, each carrying the corresponding sessionUser.
+func (f *TrinoFake) SetQueuedQueries(perUser map[string]int) {
+	f.mu.Lock()
+	f.queuedByUser = make(map[string]int, len(perUser))
+	for u, n := range perUser {
+		f.queuedByUser[u] = n
+	}
+	f.mu.Unlock()
+}
+
+// SetMetrics sets the OpenMetrics body returned verbatim by the metrics endpoint.
+func (f *TrinoFake) SetMetrics(body string) {
+	f.mu.Lock()
+	f.metricsBody = body
+	f.mu.Unlock()
+}
+
+// SetMetricsPath overrides the metrics endpoint path (default /metrics).
+func (f *TrinoFake) SetMetricsPath(path string) {
+	f.mu.Lock()
+	f.metricsPath = path
+	f.mu.Unlock()
+}
+
+// LoginCount returns the number of POST /ui/login requests received.
+func (f *TrinoFake) LoginCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.loginCount
+}
+
+// UIStatsHits returns the number of GET /ui/api/stats requests served (with a cookie).
+func (f *TrinoFake) UIStatsHits() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.uiStatsHits
+}
+
+// UIQueryHits returns the number of GET /ui/api/query requests served (with a cookie).
+func (f *TrinoFake) UIQueryHits() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.uiQueryHits
+}
+
+// MetricsHits returns the number of authenticated GETs served on the metrics endpoint.
+func (f *TrinoFake) MetricsHits() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.metricsHits
+}
+
+// LastForwardedProto returns the X-Forwarded-Proto header seen on the most recent UI
+// stats/query GET (empty if none was set).
+func (f *TrinoFake) LastForwardedProto() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastForwardedTo
+}
+
+// LastMetricsAuth returns the Basic-auth user and X-Trino-User seen on the most recent
+// metrics GET. Exactly one is non-empty per request depending on the collector's auth
+// header selection (Basic when a password is configured, else X-Trino-User).
+func (f *TrinoFake) LastMetricsAuth() (basicUser, trinoUser string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastBasicUser, f.lastTrinoUser
+}
+
 func (f *TrinoFake) dispatch(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 
@@ -121,9 +239,27 @@ func (f *TrinoFake) dispatch(w http.ResponseWriter, r *http.Request) {
 		f.handleStatement(w, r)
 	case strings.HasPrefix(path, "/v1/query/"):
 		f.handleQuery(w, r)
+	case path == "/ui/login" && r.Method == http.MethodPost:
+		f.handleUILogin(w, r)
+	case path == "/ui/api/stats" && r.Method == http.MethodGet:
+		f.handleUIStats(w, r)
+	case path == "/ui/api/query" && r.Method == http.MethodGet:
+		f.handleUIQuery(w, r)
+	case path == f.metricsEndpoint() && r.Method == http.MethodGet:
+		f.handleMetrics(w, r)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// metricsEndpoint returns the configured OpenMetrics path, defaulting to /metrics.
+func (f *TrinoFake) metricsEndpoint() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.metricsPath == "" {
+		return "/metrics"
+	}
+	return f.metricsPath
 }
 
 func (f *TrinoFake) handleInfo(w http.ResponseWriter, _ *http.Request) {
@@ -139,6 +275,124 @@ func (f *TrinoFake) handleInfo(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	_, _ = fmt.Fprint(w, `{"starting":false,"uptime":"0.00s","nodeVersion":{"version":"481"}}`)
+}
+
+// hasUICookie reports whether the request carries the session cookie issued by a
+// successful /ui/login.
+func (f *TrinoFake) hasUICookie(r *http.Request) bool {
+	c, err := r.Cookie(uiCookieName)
+	return err == nil && c.Value != ""
+}
+
+// handleUILogin emulates Trino's form login: the form must carry credentials that
+// match the ones registered via SetUICredentials, otherwise it answers 403 (mirroring
+// the gateway's treatment of a failed login as "no session"). A success sets the UI
+// session cookie. When no credentials were configured, every login is rejected so the
+// default fake exposes no UI surface.
+func (f *TrinoFake) handleUILogin(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	user := r.PostFormValue("username")
+	pass := r.PostFormValue("password")
+
+	f.mu.Lock()
+	f.loginCount++
+	ok := f.uiCredsSet && user == f.uiUsername && pass == f.uiPassword
+	f.mu.Unlock()
+
+	if !ok {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     uiCookieName,
+		Value:    "session-" + user,
+		Path:     "/",
+		HttpOnly: true,
+	})
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleUIStats emulates GET /ui/api/stats. It requires the UI session cookie (401
+// otherwise) and returns the activeWorkers/runningQueries/queuedQueries configured via
+// SetUIStats. It records the X-Forwarded-Proto header so tests can assert it.
+func (f *TrinoFake) handleUIStats(w http.ResponseWriter, r *http.Request) {
+	if !f.hasUICookie(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	f.mu.Lock()
+	f.uiStatsHits++
+	f.lastForwardedTo = r.Header.Get("X-Forwarded-Proto")
+	resp := map[string]int{
+		"activeWorkers":  f.activeWorkers,
+		"runningQueries": f.runningQ,
+		"queuedQueries":  f.queuedQ,
+	}
+	f.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// handleUIQuery emulates GET /ui/api/query?state=QUEUED, returning one entry per queued
+// query expanded from the per-user counts set via SetQueuedQueries. It requires the UI
+// session cookie (401 otherwise) and records the X-Forwarded-Proto header.
+func (f *TrinoFake) handleUIQuery(w http.ResponseWriter, r *http.Request) {
+	if !f.hasUICookie(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	f.mu.Lock()
+	f.uiQueryHits++
+	f.lastForwardedTo = r.Header.Get("X-Forwarded-Proto")
+	queries := make([]map[string]any, 0)
+	seq := 0
+	for user, n := range f.queuedByUser {
+		for i := 0; i < n; i++ {
+			seq++
+			queries = append(queries, map[string]any{
+				"queryId":     fmt.Sprintf("q_%d", seq),
+				"sessionUser": user,
+				"state":       "QUEUED",
+			})
+		}
+	}
+	f.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(queries)
+}
+
+// handleMetrics emulates the OpenMetrics endpoint. It requires either Basic auth or an
+// X-Trino-User header (recording whichever it sees) and returns the body configured via
+// SetMetrics verbatim with the OpenMetrics content type.
+func (f *TrinoFake) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	basicUser, _, hasBasic := r.BasicAuth()
+	trinoUser := r.Header.Get("X-Trino-User")
+	if !hasBasic && trinoUser == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	f.mu.Lock()
+	f.metricsHits++
+	if hasBasic {
+		f.lastBasicUser = basicUser
+	}
+	if trinoUser != "" {
+		f.lastTrinoUser = trinoUser
+	}
+	body := f.metricsBody
+	f.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/openmetrics-text; version=1.0.0; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = fmt.Fprint(w, body)
 }
 
 func (f *TrinoFake) handleStatement(w http.ResponseWriter, r *http.Request) {

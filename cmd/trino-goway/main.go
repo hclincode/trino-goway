@@ -21,6 +21,7 @@ import (
 
 	"github.com/hclincode/trino-goway/internal/admin"
 	"github.com/hclincode/trino-goway/internal/auth"
+	"github.com/hclincode/trino-goway/internal/clusterstats"
 	"github.com/hclincode/trino-goway/internal/config"
 	"github.com/hclincode/trino-goway/internal/lifecycle"
 	"github.com/hclincode/trino-goway/internal/metrics"
@@ -54,6 +55,10 @@ var (
 	_ routing.RouterMetrics  = (*metrics.RouterMetrics)(nil)
 	_ auth.Metrics           = (*metrics.AuthMetrics)(nil)
 	_ persistence.Metrics    = (*metrics.PersistenceMetrics)(nil)
+	// The stats store is both the monitor's stats observer (write side) and the
+	// admin's stats provider (read side).
+	_ monitor.StatsObserver = (*clusterstats.StatsStore)(nil)
+	_ admin.StatsProvider   = (*clusterstats.StatsStore)(nil)
 )
 
 func main() {
@@ -88,7 +93,16 @@ func run(configPath string, log *slog.Logger) error {
 	rootCtx, rootCancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer rootCancel()
 
-	// --- HTTP clients (Hard Invariant: three distinct clients with distinct concerns). ---
+	// --- HTTP clients (Hard Invariant #12: distinct clients with distinct concerns). ---
+	// Four pools, never shared:
+	//   1. proxyClient   — POST /v1/statement and statement-path forwarding.
+	//   2. monitorClient — /v1/info health probes.
+	//   3. routerClient  — external routing-service calls (follows redirects).
+	//   4. statsClient   — cluster-stats collection (UI_API/METRICS only);
+	//      constructed only when ClusterStats.MonitorType needs outbound HTTP, so
+	//      the default INFO_API/NOOP path stays at three live pools. The UI_API
+	//      cookie jar lives inside the collector, not on this shared transport (R5).
+	// Pool isolation prevents backpressure on one path starving the others.
 	proxyClient := &http.Client{
 		Timeout: cfg.Proxy.RequestTimeout.D,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -103,6 +117,17 @@ func run(configPath string, log *slog.Logger) error {
 	}
 	routerClient := &http.Client{
 		Timeout: cfg.Routing.External.Timeout.D,
+	}
+	// statsClient is built lazily — only the UI_API/METRICS collectors issue stats
+	// HTTP; INFO_API/NOOP reuse the monitor verdict and need no client.
+	var statsClient *http.Client
+	if mt := cfg.ClusterStats.MonitorType; mt == "UI_API" || mt == "METRICS" {
+		statsClient = &http.Client{
+			Timeout: cfg.Monitor.StatsTimeout.D,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
 	}
 
 	// --- Metrics registry (explicit construction; no global registry). ---
@@ -160,6 +185,26 @@ func run(configPath string, log *slog.Logger) error {
 	// --- Monitor. ---
 	mon := monitor.New(cfg.Monitor, monitorClient, log.With("component", "monitor"))
 	mon.SetObserver(backendMetrics)
+
+	// --- Cluster stats (UC-MON-02 / M7). ---
+	// The collector rides the monitor tick and publishes a per-tick name-keyed
+	// snapshot into statsStore, which the admin layer reads. INFO_API (default)
+	// and NOOP reuse mon.Status (no extra HTTP); UI_API/METRICS use statsClient.
+	statsStore := clusterstats.NewStatsStore()
+	collector, err := clusterstats.NewCollector(
+		cfg.ClusterStats,
+		cfg.Monitor,
+		cfg.BackendState,
+		mon.Status,
+		statsClient,
+		log.With("component", "clusterstats"),
+	)
+	if err != nil {
+		return fmt.Errorf("trino-goway: build cluster-stats collector: %w", err)
+	}
+	mon.SetClusterStatsCollector(collector)
+	mon.SetStatsObserver(statsStore)
+	log.Info("trino-goway: cluster stats configured", "clusterStatsMonitor", cfg.ClusterStats.MonitorType)
 
 	// --- Routing. ---
 	router, err := routing.New(routing.Config{
@@ -229,6 +274,7 @@ func run(configPath string, log *slog.Logger) error {
 		History:      historyDAO,
 		Monitor:      mon,
 		StatusMut:    mon,
+		Stats:        statsStore,
 		AuthMW:       authMW,
 		UIFS:         adminUIFS,
 		WebLogin:     webLogin,
@@ -347,7 +393,14 @@ func refreshBackends(ctx context.Context, dao *persistence.BackendDAO, mon *moni
 	pm.SetDBUp(true)
 	monBackends := make([]monitor.Backend, len(backends))
 	for i, b := range backends {
-		monBackends[i] = monitor.SimpleBackend{Name: b.Name, URL: b.URL}
+		// Populate ExternalURL/RoutingGroup so the backend satisfies
+		// clusterstats.Backend with a fully-populated identity for collectors.
+		monBackends[i] = monitor.SimpleBackend{
+			Name:         b.Name,
+			URL:          b.URL,
+			ExternalURL:  b.ExternalURL,
+			RoutingGroup: b.RoutingGroup,
+		}
 	}
 	mon.SetBackends(monBackends)
 	return nil

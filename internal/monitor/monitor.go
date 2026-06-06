@@ -11,14 +11,28 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/hclincode/trino-goway/internal/clusterstats"
 	"github.com/hclincode/trino-goway/internal/config"
 )
 
 // Backend is the minimal interface the monitor needs from persistence.
-// Defined here (consumer package) per conventions.
+// Defined here (consumer package) per conventions. It is a superset of
+// clusterstats.Backend so the same backend value drives both health probes and
+// stats collection.
 type Backend interface {
 	GetName() string
 	GetURL() string
+	GetExternalURL() string
+	GetRoutingGroup() string
+}
+
+// StatsObserver is notified of the per-tick cluster-stats snapshot, keyed by
+// backend name. Defined here (consumer owns the interface); nil-safe like
+// StatusObserver — when the monitor has no stats observer the notification is
+// skipped. This is the one place internal/monitor imports internal/clusterstats
+// (one-way: monitor → clusterstats).
+type StatsObserver interface {
+	ObserveStats(map[string]clusterstats.ClusterStats)
 }
 
 // StatusObserver is notified of the full backend health snapshot after every
@@ -35,15 +49,23 @@ type StatusObserver interface {
 
 // SimpleBackend is a value type satisfying Backend, used by tests and the composition root.
 type SimpleBackend struct {
-	Name string
-	URL  string
+	Name         string
+	URL          string
+	ExternalURL  string
+	RoutingGroup string
 }
 
 // GetName returns the backend's name.
 func (b SimpleBackend) GetName() string { return b.Name }
 
-// GetURL returns the backend's URL.
+// GetURL returns the backend's URL (proxyTo).
 func (b SimpleBackend) GetURL() string { return b.URL }
+
+// GetExternalURL returns the backend's external URL (may be empty).
+func (b SimpleBackend) GetExternalURL() string { return b.ExternalURL }
+
+// GetRoutingGroup returns the backend's routing group (may be empty).
+func (b SimpleBackend) GetRoutingGroup() string { return b.RoutingGroup }
 
 // Monitor periodically probes backends and maintains a health map.
 type Monitor struct {
@@ -67,6 +89,13 @@ type Monitor struct {
 
 	// observer is notified of status snapshots; nil-safe. Set via SetObserver before Start.
 	observer StatusObserver
+
+	// collector collects per-backend cluster stats on the same probe tick; nil-safe.
+	// Set via SetClusterStatsCollector before Start.
+	collector clusterstats.Collector
+	// statsObserver receives the per-tick name-keyed stats snapshot; nil-safe.
+	// Set via SetStatsObserver before Start.
+	statsObserver StatsObserver
 }
 
 // New creates a new Monitor with the given config, HTTP client, and logger.
@@ -94,6 +123,19 @@ func (m *Monitor) SetOnFirstTick(fn func()) {
 // probe cycle and whenever the backend set changes. Must be called before Start.
 func (m *Monitor) SetObserver(o StatusObserver) {
 	m.observer = o
+}
+
+// SetClusterStatsCollector registers the collector that gathers per-backend
+// cluster stats on each probe tick. Nil-safe (a nil collector disables stats
+// collection). Must be called before Start.
+func (m *Monitor) SetClusterStatsCollector(c clusterstats.Collector) {
+	m.collector = c
+}
+
+// SetStatsObserver registers the observer that receives the per-tick name-keyed
+// stats snapshot. Nil-safe. Must be called before Start.
+func (m *Monitor) SetStatsObserver(o StatsObserver) {
+	m.statsObserver = o
 }
 
 // notifyObserver builds the current snapshot (URL → status, URL → name) and
@@ -272,7 +314,52 @@ func (m *Monitor) probe(ctx context.Context) {
 
 	m.notifyObserver()
 
+	// Cluster-stats collection rides the same tick (no second scheduler, R1). It
+	// runs AFTER the health swap so collectors that reuse the monitor verdict
+	// (INFO_API/NOOP) observe this tick's status. Nil collector or nil observer
+	// disables it. Stats must never gate or abort readiness (R7) — this block has
+	// no effect on m.status or onFirstTick.
+	m.collectStats(ctx, backends)
+
 	m.log.Debug("monitor: probe complete", "backends", len(backends))
+}
+
+// collectStats fans out the configured collector across backends (reusing the
+// per-backend pattern from the health probe) and hands one name-keyed snapshot to
+// the stats observer. No-op when either the collector or the observer is nil.
+func (m *Monitor) collectStats(ctx context.Context, backends []Backend) {
+	if m.collector == nil || m.statsObserver == nil {
+		return
+	}
+
+	// Stats requests get their own (typically longer) deadline; the collectors
+	// also apply StatsTimeout internally, so this outer bound just caps a stuck
+	// Collect. Falls back to CheckTimeout when StatsTimeout is unset.
+	statsTimeout := m.cfg.StatsTimeout.D
+	if statsTimeout <= 0 {
+		statsTimeout = m.cfg.CheckTimeout.D
+	}
+
+	snapshot := make(map[string]clusterstats.ClusterStats, len(backends))
+	var snapMu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, b := range backends {
+		wg.Add(1)
+		// goroutine exits when Collect returns or probeCtx times out
+		go func(b Backend) {
+			defer wg.Done()
+			probeCtx, cancel := context.WithTimeout(ctx, statsTimeout)
+			defer cancel()
+			cs := m.collector.Collect(probeCtx, b)
+			snapMu.Lock()
+			snapshot[b.GetName()] = cs
+			snapMu.Unlock()
+		}(b)
+	}
+	wg.Wait()
+
+	m.statsObserver.ObserveStats(snapshot)
 }
 
 // trinoInfoResponse is the JSON shape returned by Trino's /v1/info endpoint.
@@ -282,7 +369,10 @@ type trinoInfoResponse struct {
 
 // checkOne probes a single backend's /v1/info endpoint.
 // Returns StatusHealthy if the backend responds with 200 and {"starting": false}.
-// Returns StatusUnhealthy for any error or if the cluster is still starting.
+// Returns StatusPending if the cluster is reachable but still starting
+// ({"starting": true}), matching Java's ClusterStatsInfoApiMonitor which maps
+// starting → PENDING. Returns StatusUnhealthy for any transport/decode error or
+// a non-200 response.
 func (m *Monitor) checkOne(ctx context.Context, url string) TrinoStatus {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url+"/v1/info", nil)
 	if err != nil {
@@ -314,7 +404,7 @@ func (m *Monitor) checkOne(ctx context.Context, url string) TrinoStatus {
 
 	if info.Starting {
 		m.log.Debug("monitor: checkOne: backend still starting", "url", url)
-		return StatusUnhealthy
+		return StatusPending
 	}
 
 	return StatusHealthy

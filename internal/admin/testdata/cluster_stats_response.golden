@@ -1,0 +1,13 @@
+{
+  "clusterId": "be1",
+  "runningQueryCount": 5,
+  "queuedQueryCount": 2,
+  "numWorkerNodes": 3,
+  "trinoStatus": "HEALTHY",
+  "proxyTo": "http://be1:8080",
+  "externalUrl": "https://ext:8443",
+  "routingGroup": "adhoc",
+  "userQueuedCount": {
+    "alice": 2
+  }
+}
