@@ -1,0 +1,77 @@
+# Recovery chain — history lookup for follow-up GETs.
+#
+# Java reference: RoutingManager's recovery chain (cache → history → HEAD
+#                 probe → first-active) handles follow-up GET /v1/statement/
+#                 <queryId>/<token> requests where the cache may have evicted
+#                 the queryId → backend mapping. The history fallback queries
+#                 the persistence layer for any prior record of the queryId.
+# Go reference:   internal/routing/router.go::routeForKnownQuery implements
+#                 the same chain; internal/routing/router_test.go covers the
+#                 unit, and internal/proxy/proxy_test.go::
+#                 TestProxy_Seam4_RouterResultHandling covers the proxy seam.
+#
+# Live-mode observability: we cannot externally force a cache eviction
+# between steps 1 and 2 from the wire side, so the second GET will usually
+# be a cache HIT rather than a history lookup. The diff still has value:
+# both gateways MUST resolve the follow-up GET to the same backend (the
+# shared Trino container) and return shape-equivalent responses regardless
+# of which recovery-chain rung fires on each side. A divergence here would
+# flag a recovery-chain shape bug (e.g. one gateway 404s where the other
+# proxies through).
+#
+# A deeper "force cache eviction, prove history-lookup path fires" assertion
+# is owned by internal/routing/router_test.go and a future Phase-3 admin
+# endpoint (TODO Task 47-48) that exposes cache-clear; the diff harness
+# proves wire-shape parity through whichever rung naturally fires.
+#
+# Diff policy notes:
+#   - Date, Content-Length, Server, Set-Cookie: per-request / per-instance.
+#     [JUSTIFIED]
+#   - id, nextUri, infoUri, partialCancelUri: queryId varies. [JUSTIFIED]
+#   - stats.*Millis / stats.* counters: timing- and execution-shape-dependent.
+#     [JUSTIFIED]
+#   - stats.state: poll-timing dependent (QUEUED vs RUNNING vs FINISHED).
+#     [JUSTIFIED]
+#   - data: SELECT 1 may stream the row in an earlier poll; final response
+#     may or may not include it. [JUSTIFIED]
+#   - warnings: non-deterministic. [JUSTIFIED]
+#   - rewriteHostPort: nextUri host:port differs per gateway.
+name: recovery-chain-history
+description: POST /v1/statement then GET the returned nextUri; both gateways MUST resolve the follow-up via the recovery chain to the same backend with equivalent response shape. Cache-eviction forcing is owned by unit tests; this scenario gates wire-shape parity through whichever recovery rung naturally fires.
+steps:
+  - method: POST
+    path: /v1/statement
+    headers:
+      X-Trino-User: diff-harness
+      Content-Type: text/plain
+    body: "SELECT 1"
+    extract:
+      next: $.nextUri
+      queryId: $.id
+  - method: GET
+    pathFromVar: next
+    headers:
+      X-Trino-User: diff-harness
+diff:
+  ignoreHeaders:
+    - Date  # [JUSTIFIED] per-request wall clock; never equal across two live calls
+    - Content-Length  # [JUSTIFIED] drifts after host:port rewrite; body itself is still fully diffed
+    - Server  # [JUSTIFIED] Jetty vs net/http; not part of any gateway API contract
+    - Set-Cookie  # [JUSTIFIED] Java may emit JSESSIONID/TG.* per session config; cookie wire-compat asserted positively in seam7
+  ignoreBodyFields:
+    - id  # [JUSTIFIED] Trino mints a fresh queryId per submission; cannot match across two runs
+    - nextUri  # [JUSTIFIED] embeds the per-run queryId; shape/presence still asserted
+    - infoUri  # [JUSTIFIED] embeds the per-run queryId
+    - partialCancelUri  # [JUSTIFIED] embeds the per-run queryId
+    - stats.elapsedTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.queuedTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.cpuTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.wallTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.processedRows  # [JUSTIFIED] execution-shape-dependent stat
+    - stats.processedBytes  # [JUSTIFIED] execution-shape-dependent stat
+    - stats.peakMemoryBytes  # [JUSTIFIED] execution-shape-dependent stat
+    - stats.physicalInputBytes  # [JUSTIFIED] execution-shape-dependent stat
+    - stats.state  # [JUSTIFIED] poll-timing dependent (QUEUED/RUNNING/FINISHED)
+    - data  # [JUSTIFIED] row may stream in an earlier poll; terminal payload presence is non-deterministic
+    - warnings  # [JUSTIFIED] Trino's warning emitter is non-deterministic across runs
+  rewriteHostPort: true

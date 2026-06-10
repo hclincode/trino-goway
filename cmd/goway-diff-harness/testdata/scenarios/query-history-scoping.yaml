@@ -1,0 +1,84 @@
+# Query history scoping — webapp endpoint returns user-scoped history.
+#
+# NOT RUN IN THE LIVE DIFF TARGET (excluded in cmd/goway-diff-harness/live_test.go
+# via liveExcludedScenarios). Reason — verified against the live fleet, not assumed:
+#   trino-gateway 19 in anonymous mode returns admin-sees-all (UNSCOPED) query
+#   history (verified live: GET /trino-gateway/api/queryHistory read as alice
+#   returned 7 records spanning bob/alice/diff-harness/diff-harness-readiness),
+#   and Java's shared Postgres accumulates whole-run + Java-only readiness traffic
+#   (the bootstrap SELECT 1 from bootstrap.go::waitGatewayRoutable, sent to Java
+#   only) the per-run replayed Go store cannot mirror — so a live Java↔Go diff
+#   would compare non-equivalent record SETS, not scoping behavior. User-scoping
+#   parity is asserted by internal/admin/admin_test.go.
+# F3-class documented unit-only exclusion; the scenario stays committed +
+# validation-clean for documentation. The scenario's own "alice sees only her
+# record" premise does not hold on real trino-gateway 19 (admin-sees-all), which
+# is the second reason a live diff here is not meaningful.
+#
+# Go reference:   internal/admin/webapp.go + internal/admin/query.go (scoping logic);
+#                 internal/admin/admin_test.go covers role-based filtering.
+#
+# Live-mode observability: both gateways are wired to the same auth model in
+# noop mode (X-Trino-User trusted from the request header), so submitting two
+# queries — one as alice, one as bob — and then reading the history as each
+# user produces a deterministic per-user record set on EACH gateway. The
+# diff asserts wire-shape parity: list envelope, item field names, item
+# count after equivalent submissions.
+#
+# Steps 1-2 submit one query per user. Step 3 reads alice's view. Because
+# both databases were empty at scenario start (Phase-2 bootstrap policy:
+# fresh DB per run) and the same two queries were submitted on each gateway,
+# alice MUST see exactly one record on both gateways, bob's record MUST be
+# absent. Cross-user leakage would flag a scoping regression — the assertion
+# survives the field-value ignores below because the LIST LENGTH and field
+# SHAPE are not in ignoreBodyFields.
+#
+# Diff policy notes:
+#   - Date, Content-Length, Server, Set-Cookie: per-request / per-instance.
+#     [JUSTIFIED]
+#   - queryId: Trino mints distinct queryIds on each gateway submission, so
+#     the values differ between sides for the same scenario. The PRESENCE
+#     and COUNT of records is what we assert; values are noise. [JUSTIFIED]
+#   - createdAt / updatedAt / created_at / updated_at / submissionTime /
+#     captureTime: persistence timestamps differ per-write. [JUSTIFIED]
+#   - source: Trino sometimes auto-decorates source with version info that
+#     differs across the two gateways' default X-Trino-Source handling.
+#     [JUSTIFIED]
+#   - backendUrl: each gateway has its own backend URL (port differs).
+#     [JUSTIFIED]
+name: query-history-scoping
+description: Submit one query per user (alice, bob), then read the queryHistory as alice; both gateways MUST return alice's record only with equivalent list shape. Cross-user leakage or shape divergence flags a scoping regression.
+steps:
+  - method: POST
+    path: /v1/statement
+    headers:
+      X-Trino-User: alice
+      Content-Type: text/plain
+    body: "SELECT 1"
+  - method: POST
+    path: /v1/statement
+    headers:
+      X-Trino-User: bob
+      Content-Type: text/plain
+    body: "SELECT 2"
+  - method: GET
+    path: /trino-gateway/api/queryHistory
+    headers:
+      X-Trino-User: alice
+diff:
+  ignoreHeaders:
+    - Date  # [JUSTIFIED] per-request wall clock; never equal across two live calls
+    - Content-Length  # [JUSTIFIED] drifts after host:port rewrite; body itself is still fully diffed
+    - Server  # [JUSTIFIED] Jetty vs net/http; not part of any gateway API contract
+    - Set-Cookie  # [JUSTIFIED] Java may emit JSESSIONID/TG.* per session config; cookie wire-compat asserted positively in seam7
+  ignoreBodyFields:
+    - queryId  # [JUSTIFIED] Trino mints distinct queryIds per submission; presence/count is asserted, not value
+    - createdAt  # [JUSTIFIED] persistence timestamp; differs per-write across independent DBs
+    - updatedAt  # [JUSTIFIED] persistence timestamp; differs per-write across independent DBs
+    - created_at  # [JUSTIFIED] persistence timestamp; differs per-write across independent DBs
+    - updated_at  # [JUSTIFIED] persistence timestamp; differs per-write across independent DBs
+    - submissionTime  # [JUSTIFIED] persistence timestamp; differs per-write across independent DBs
+    - captureTime  # [JUSTIFIED] persistence timestamp; differs per-write across independent DBs
+    - source  # [JUSTIFIED] Trino auto-decorates source with version info that differs across the gateways
+    - backendUrl  # [JUSTIFIED] each gateway has its own backend URL (port differs)
+  rewriteHostPort: true

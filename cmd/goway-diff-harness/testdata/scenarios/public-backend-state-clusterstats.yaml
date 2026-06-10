@@ -1,0 +1,92 @@
+# Public backend-state cluster stats (M7 / UC-ADM-14 / UC-MON-02) — register a
+# backend, then read GET /api/public/backends/{name}/state and assert both
+# gateways return the SAME ClusterStats wire SHAPE (field names + status codes +
+# Content-Type), NOT the same live integer values.
+#
+# Java reference: PublicResource.getBackendState (@Path /api/public/backends/
+#                 {name}/state) returns the ClusterStats record:
+#                 {clusterId, runningQueryCount, queuedQueryCount, numWorkerNodes,
+#                  trinoStatus, proxyTo, externalUrl, routingGroup, userQueuedCount}.
+#                 The counts are populated by the configured ClusterStatsMonitor
+#                 (see clusterStatsConfiguration in the Java gateway template).
+# Go reference:   internal/admin/backend.go::getPublicBackendState emits
+#                 ClusterStatsResponse with the identical JSON tags; counts flow
+#                 from internal/clusterstats (live under UI_API/METRICS, 0 under
+#                 the INFO_API default). internal/admin/backend_test.go pins the
+#                 9-field tag set on the unit side.
+#
+# WHY THIS IS A SHAPE-ONLY DIFF (per-value fields ignored, not asserted):
+# The two gateways run independent Trino fleets behind independent backend
+# registrations, and the live query/worker counts are per-run, per-fleet facts:
+#   - runningQueryCount / queuedQueryCount: live counts on each fleet at probe
+#     time; never deterministically equal across two independent gateways.
+#   - numWorkerNodes: each fleet's active worker count (UI_API only); a property
+#     of the cluster behind each side, not of the wire contract.
+#   - userQueuedCount: live session-user → queued-count membership; per-fleet.
+#   - clusterId: the backend name/instance the side registered; the diff registers
+#     a deterministic name on each side, but the field carries instance identity
+#     and is treated as non-asserted to stay robust if the harness varies it.
+# What IS asserted and survives the ignores: the response is the ClusterStats
+# 9-field SHAPE (not BackendResponse), status 200, Content-Type application/json,
+# and the trinoStatus enum label is one of the wire-form values. Field-name
+# equivalence (the M7 contract) is the regression guard; field VALUES are noise.
+#
+# NOT RUN IN THE LIVE DIFF TARGET (excluded in cmd/goway-diff-harness/live_test.go
+# via liveExcludedScenarios). The Java fixture configures clusterStatsConfiguration.
+# monitorType: INFO_API (internal/diffharness/testdata/java-gateway-config.yaml.tmpl),
+# matching Go's default, so BOTH sides emit the ClusterStats shape with counts 0 —
+# the field-NAME parity (the M7 contract) is identical. The live diff is excluded
+# anyway because two object fields diverge by VALUE in ways a live diff cannot
+# reconcile and that are intentional, documented choices — not regressions:
+#   - externalUrl: Go populates it from persistence with a proxyTo fallback when the
+#     backend has no externalUrl (choice b — internal/admin/backend.go
+#     externalURLOrProxyTo), whereas Java's ClusterStats leaves it as the raw
+#     backend value (null when unset). The registered stub has no externalUrl, so
+#     the two sides differ (Go: the rewritten proxyTo; Java: null).
+#   - userQueuedCount: Go emits it absent (,omitempty) for an uncollected/INFO_API
+#     backend; Java emits an explicit null. Absent vs null is a wire encoding
+#     difference, not a shape difference.
+# Both divergences are asserted POSITIVELY and unit/E2E-side instead: the 9-field
+# shape + tag exactness by internal/admin/backend_test.go (golden
+# cluster_stats_response.golden) and end to end by internal/e2e/
+# cluster_stats_e2e_test.go (TestE2E_ClusterStats_*). This is the same F3-class
+# "documented unit-only exclusion" used by query-history-scoping; the scenario
+# stays committed + validation-clean for documentation.
+#
+# Diff policy notes (apply if the exclusion is ever lifted):
+#   - Date, Content-Length, Server, Set-Cookie, Vary, X-Content-Type-Options:
+#     per-request / per-instance headers, not part of the API contract.
+#     [JUSTIFIED]
+#   - rewriteHostPort: proxyTo carries a 127.0.0.1:<port> stub URL whose port
+#     differs per side; host:port rewrite makes the JSON path equivalent.
+name: public-backend-state-clusterstats
+description: Register a backend, then GET /api/public/backends/{name}/state on both gateways; both MUST return the ClusterStats 9-field wire shape (clusterId, runningQueryCount, queuedQueryCount, numWorkerNodes, trinoStatus, proxyTo, externalUrl, routingGroup, userQueuedCount) with equal status/Content-Type. Live per-fleet counts are ignored; field-name SHAPE is the M7 contract under test.
+steps:
+  - method: POST
+    path: /gateway/backend/modify/add
+    headers:
+      Content-Type: application/json
+    body: '{"name":"diff-clusterstats-backend","proxyTo":"http://127.0.0.1:9998","active":true,"routingGroup":"adhoc"}'
+  - method: GET
+    path: /api/public/backends/diff-clusterstats-backend/state
+  - method: POST
+    path: /gateway/backend/modify/delete
+    headers:
+      Content-Type: text/plain
+    body: "diff-clusterstats-backend"
+diff:
+  ignoreHeaders:
+    - Date  # [JUSTIFIED] per-request wall clock; never equal across two live calls
+    - Content-Length  # [JUSTIFIED] drifts after host:port rewrite and per-side count values; body itself is still fully diffed
+    - Server  # [JUSTIFIED] Jetty vs net/http; not part of any gateway API contract
+    - Set-Cookie  # [JUSTIFIED] Java may emit JSESSIONID/TG.* per session config; cookie wire-compat asserted positively in seam7
+    - Vary  # [JUSTIFIED] net/http adds Vary: Accept-Encoding; Jetty omits it; not part of the public-API contract
+    - X-Content-Type-Options  # [JUSTIFIED] per-gateway security-header default; not part of the public-API contract
+  ignoreBodyFields:
+    - runningQueryCount  # [JUSTIFIED] live per-run query count on independent fleets; presence/field-name is asserted, value is per-fleet noise
+    - queuedQueryCount  # [JUSTIFIED] live per-run query count on independent fleets; presence/field-name is asserted, value is per-fleet noise
+    - numWorkerNodes  # [JUSTIFIED] each fleet's active worker count (UI_API only); a cluster property, not a wire-contract value
+    - userQueuedCount  # [JUSTIFIED] Go omits it (,omitempty) for an uncollected/INFO_API backend; Java emits explicit null — encoding difference, not shape
+    - clusterId  # [JUSTIFIED] backend name/instance identity differs per fleet registration; carried as non-asserted to stay robust
+    - externalUrl  # [JUSTIFIED] Go fills it from persistence with a proxyTo fallback (choice b); Java leaves the raw null when the backend has no externalUrl
+  rewriteHostPort: true

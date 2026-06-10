@@ -1,0 +1,73 @@
+# Admin backend CRUD — full add → activate → deactivate → delete cycle on the
+# /gateway/backend/* surface. The wire shape (JSON envelope, status codes,
+# Content-Type) is the contract Trino Gateway clients depend on.
+#
+# Java reference: trino-gateway GatewayWebAppResource and proxy-server
+#                 GatewayResource expose /gateway/backend/{all,active,
+#                 activate/{name},deactivate/{name},modify/{add,update,delete}}.
+#                 Java returns ProxyBackend JSON for list/add; 200 with empty
+#                 body for activate/deactivate; raw-string body for delete.
+# Go reference:   internal/admin/backend.go implements the same handlers with
+#                 the same wire shapes; internal/admin/admin_test.go covers
+#                 status codes and JSON shape on the unit side.
+#
+# Live-mode observability: backed by independent Postgres databases the two
+# gateways will end up with identical row content for the same scenario name,
+# so the comparison reduces to JSON shape + status code + Content-Type. We
+# choose a unique test-backend name ("diff-harness-test-backend") that won't
+# collide with the seam scenarios' shared Trino target.
+#
+# Diff policy notes:
+#   - Date: per-request timestamp. [JUSTIFIED]
+#   - Content-Length: depends on host:port string length, drifts after
+#     host-rewrite. [JUSTIFIED]
+#   - Server: each gateway sets its own (Jetty vs. net/http) and it is not
+#     part of the admin-API contract. [JUSTIFIED]
+#   - Set-Cookie: Java may emit JSESSIONID / TG.* cookies on admin endpoints
+#     depending on session config; we test cookie wire-compat separately in
+#     seam7. [JUSTIFIED]
+#   - createdAt / updatedAt / created_at / updated_at: persistence timestamps
+#     differ per-write across the two databases. Wire-shape is the contract,
+#     not the absolute time. [JUSTIFIED]
+#   - rewriteHostPort: the proxyTo URL we register intentionally points at a
+#     127.0.0.1:<port> stub; we rewrite host:port so the JSON path is
+#     equivalent regardless of which side's harness picked which port.
+name: admin-backend-crud
+description: Add/activate/deactivate/delete a backend via /gateway/backend/*; both gateways MUST return the same wire shape at every step. Requires the //go:build diff live harness to drive both Java and Go gateways with shared admin auth.
+steps:
+  - method: POST
+    path: /gateway/backend/modify/add
+    headers:
+      Content-Type: application/json
+    body: '{"name":"diff-harness-test-backend","proxyTo":"http://127.0.0.1:9999","active":true,"routingGroup":"adhoc"}'
+  - method: GET
+    path: /gateway/backend/all
+  - method: POST
+    path: /gateway/backend/activate/diff-harness-test-backend
+  - method: GET
+    path: /gateway/backend/active
+  - method: POST
+    path: /gateway/backend/deactivate/diff-harness-test-backend
+  - method: GET
+    path: /gateway/backend/active
+  - method: POST
+    path: /gateway/backend/modify/delete
+    headers:
+      Content-Type: text/plain
+    body: "diff-harness-test-backend"
+  - method: GET
+    path: /gateway/backend/all
+diff:
+  ignoreHeaders:
+    - Date  # [JUSTIFIED] per-request wall clock; never equal across two live calls
+    - Content-Length  # [JUSTIFIED] drifts after host:port rewrite; body itself is still fully diffed
+    - Server  # [JUSTIFIED] Jetty vs net/http; not part of any gateway API contract
+    - Set-Cookie  # [JUSTIFIED] Java may emit JSESSIONID/TG.* per session config; cookie wire-compat asserted positively in seam7
+    - Vary  # [JUSTIFIED] net/http adds Vary: Accept-Encoding; Jetty omits it; not part of the admin-API contract
+    - X-Content-Type-Options  # [JUSTIFIED] per-gateway security-header default; not part of the admin-API contract
+  ignoreBodyFields:
+    - createdAt  # [JUSTIFIED] persistence timestamp; differs per-write across independent DBs
+    - updatedAt  # [JUSTIFIED] persistence timestamp; differs per-write across independent DBs
+    - created_at  # [JUSTIFIED] persistence timestamp; differs per-write across independent DBs
+    - updated_at  # [JUSTIFIED] persistence timestamp; differs per-write across independent DBs
+  rewriteHostPort: true

@@ -1,0 +1,81 @@
+# Health probe — unhealthy backend handling.
+#
+# Java reference: trino-gateway BackendStateManager periodically probes
+#                 /v1/info on every registered backend; backends whose probe
+#                 fails or returns non-2xx are flagged UNHEALTHY and excluded
+#                 from routing (RoutingManager skips them in the recovery
+#                 chain). Adding a backend with an unreachable proxyTo must
+#                 NOT break submissions: the existing healthy backend
+#                 continues to serve.
+# Go reference:   internal/monitor implements the same probe loop;
+#                 internal/routing/router.go skips backends whose status is
+#                 not StatusHealthy in the active-backend selector.
+#                 internal/admin/health_test.go covers status transitions.
+#
+# Live-mode observability: we add a bogus backend pointing at 127.0.0.1:1
+# (port 1 is reserved tcpmux and refuses connections on every dev box), then
+# attempt a POST /v1/statement. Both gateways MUST exclude the unhealthy
+# backend and route to the shared healthy Trino container, returning
+# shape-equivalent responses. If a gateway accidentally routed to the bogus
+# backend the response would be a connection error envelope — divergence
+# would flag a missing health-status check in the routing path.
+#
+# Step 1 adds the bogus backend via POST /entity (ADMIN role). Step 2
+# submits the query. We do NOT clean up the bogus backend in this scenario
+# (intentional — keeps the steps focused on the routing-exclusion
+# assertion; a separate teardown is the caller's responsibility, and the
+# unique name "diff-harness-bogus-backend" avoids collision with other
+# scenarios). The bogus backend's status starts as PENDING; the probe loop
+# will flip it to UNHEALTHY within one cycle. To avoid racing the probe,
+# the assertion is on shape equivalence, not on the bogus backend being
+# definitively marked UNHEALTHY before step 2 fires.
+#
+# Diff policy notes:
+#   - Date, Content-Length, Server, Set-Cookie: per-request / per-instance.
+#     [JUSTIFIED]
+#   - id, nextUri, infoUri, partialCancelUri: queryId varies. [JUSTIFIED]
+#   - createdAt / updatedAt / created_at / updated_at: persistence
+#     timestamps differ per-write. [JUSTIFIED]
+#   - status: backend health status (HEALTHY / PENDING / UNHEALTHY) is
+#     timing-dependent — the probe interval differs between Java and Go
+#     defaults, so the snapshot at scenario-time may differ even though the
+#     routing OUTCOME is the same. [JUSTIFIED]
+#   - stats.*Millis: timing. [JUSTIFIED]
+#   - warnings: non-deterministic. [JUSTIFIED]
+#   - rewriteHostPort: nextUri / proxyTo host:port.
+name: health-probe-unhealthy
+description: Register an unreachable backend, then POST /v1/statement; both gateways MUST exclude the unhealthy backend and route to the shared healthy backend with equivalent response shape. Probe-timing-sensitive fields are ignored; the routing OUTCOME is the assertion.
+steps:
+  - method: POST
+    path: /entity?entityType=GATEWAY_BACKEND
+    headers:
+      Content-Type: application/json
+    body: '{"name":"diff-harness-bogus-backend","proxyTo":"http://127.0.0.1:1","active":true,"routingGroup":"adhoc"}'
+  - method: POST
+    path: /v1/statement
+    headers:
+      X-Trino-User: diff-harness
+      Content-Type: text/plain
+    body: "SELECT 1"
+diff:
+  ignoreHeaders:
+    - Date  # [JUSTIFIED] per-request wall clock; never equal across two live calls
+    - Content-Length  # [JUSTIFIED] drifts after host:port rewrite; body itself is still fully diffed
+    - Server  # [JUSTIFIED] Jetty vs net/http; not part of any gateway API contract
+    - Set-Cookie  # [JUSTIFIED] Java may emit JSESSIONID/TG.* per session config; cookie wire-compat asserted positively in seam7
+  ignoreBodyFields:
+    - id  # [JUSTIFIED] Trino mints a fresh queryId per submission; cannot match across two runs
+    - nextUri  # [JUSTIFIED] embeds the per-run queryId; shape/presence still asserted
+    - infoUri  # [JUSTIFIED] embeds the per-run queryId
+    - partialCancelUri  # [JUSTIFIED] embeds the per-run queryId
+    - createdAt  # [JUSTIFIED] persistence timestamp; differs per-write across independent DBs
+    - updatedAt  # [JUSTIFIED] persistence timestamp; differs per-write across independent DBs
+    - created_at  # [JUSTIFIED] persistence timestamp; differs per-write across independent DBs
+    - updated_at  # [JUSTIFIED] persistence timestamp; differs per-write across independent DBs
+    - status  # [JUSTIFIED] probe interval differs Java vs Go; routing OUTCOME is the assertion, not the snapshot value
+    - stats.elapsedTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.queuedTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.cpuTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.wallTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - warnings  # [JUSTIFIED] Trino's warning emitter is non-deterministic across runs
+  rewriteHostPort: true

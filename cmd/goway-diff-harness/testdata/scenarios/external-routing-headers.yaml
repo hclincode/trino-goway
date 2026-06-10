@@ -1,0 +1,68 @@
+# External routing — externalHeaders injection.
+#
+# Java reference: trino-gateway external HTTP / gRPC router contract returns
+#                 {"routingGroup": "...", "externalHeaders": {...}} and the
+#                 proxy injects those headers into the upstream request before
+#                 forwarding. See RoutingGroupSelector and ProxyRequestHandler.
+# Go reference:   internal/routing/external.go performs the same call and
+#                 internal/proxy/forward.go applies externalHeaders to the
+#                 upstream request; covered structurally by
+#                 internal/proxy/proxy_test.go::TestProxy_ExternalHeaders.
+#
+# Live-mode observability: in the //go:build diff live harness BOTH gateways
+# must be configured with the SAME mock external router endpoint (the existing
+# cmd/mock-external-router-http binary, or an in-process httptest server
+# shared by both targets) returning a fixed envelope. With that wired, the
+# OBSERVABLE wire output at the gateway boundary is Trino's response — what
+# matters is that both gateways succeed identically (status, body shape).
+# Backend-received headers are NOT observable from outside the gateways, so
+# this scenario gates "both gateways consume the router envelope without
+# erroring and forward the resulting query"; the deeper "backend actually saw
+# the header" assertion is owned by internal/proxy/proxy_test.go and the
+# Phase-3 full E2E harness, not the diff harness.
+#
+# Note: this scenario requires the //go:build diff setup to provision the
+# mock router and point BOTH gateways at it before scenarios run. Until that
+# wiring lands (Task 42-44 follow-up) the scenario stays structurally valid
+# and validation-test-clean, but live execution is gated.
+#
+# Diff policy notes:
+#   - Date, Content-Length, Server, Set-Cookie: per-request / per-instance.
+#     [JUSTIFIED]
+#   - id, nextUri, infoUri, partialCancelUri: Trino mints new queryIds per
+#     submission. [JUSTIFIED]
+#   - stats.*Millis / stats.*Bytes / stats.processedRows: timing- and
+#     execution-shape-dependent. [JUSTIFIED]
+#   - warnings: non-deterministic. [JUSTIFIED]
+#   - rewriteHostPort: nextUri carries host:port; normalize on both sides.
+name: external-routing-headers
+description: POST /v1/statement when the gateway is wired to an external router returning externalHeaders; both gateways MUST forward to Trino with equivalent response shape. Backend-side header injection is covered by unit tests; this scenario gates the wire-shape parity through the router path.
+steps:
+  - method: POST
+    path: /v1/statement
+    headers:
+      X-Trino-User: diff-harness
+      X-Trino-Source: diff-harness-external-router
+      Content-Type: text/plain
+    body: "SELECT 1"
+diff:
+  ignoreHeaders:
+    - Date  # [JUSTIFIED] per-request wall clock; never equal across two live calls
+    - Content-Length  # [JUSTIFIED] drifts after host:port rewrite; body itself is still fully diffed
+    - Server  # [JUSTIFIED] Jetty vs net/http; not part of any gateway API contract
+    - Set-Cookie  # [JUSTIFIED] Java may emit JSESSIONID/TG.* per session config; cookie wire-compat asserted positively in seam7
+  ignoreBodyFields:
+    - id  # [JUSTIFIED] Trino mints a fresh queryId per submission; cannot match across two runs
+    - nextUri  # [JUSTIFIED] embeds the per-run queryId; shape/presence still asserted
+    - infoUri  # [JUSTIFIED] embeds the per-run queryId
+    - partialCancelUri  # [JUSTIFIED] embeds the per-run queryId
+    - stats.elapsedTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.queuedTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.cpuTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.wallTimeMillis  # [JUSTIFIED] timing-dependent execution stat
+    - stats.processedRows  # [JUSTIFIED] execution-shape-dependent stat
+    - stats.processedBytes  # [JUSTIFIED] execution-shape-dependent stat
+    - stats.peakMemoryBytes  # [JUSTIFIED] execution-shape-dependent stat
+    - stats.physicalInputBytes  # [JUSTIFIED] execution-shape-dependent stat
+    - warnings  # [JUSTIFIED] Trino's warning emitter is non-deterministic across runs
+  rewriteHostPort: true
