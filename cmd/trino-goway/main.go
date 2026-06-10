@@ -63,15 +63,53 @@ var (
 
 func main() {
 	configPath := flag.String("config", "config.yml", "path to gateway YAML config")
+	migrateOnly := flag.Bool("migrate-only", false, "apply database migrations under the advisory lock, then exit (for an external migrate job, e.g. a Helm pre-upgrade hook); does not start the proxy/admin servers")
 	flag.Parse()
 
 	log := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(log)
 
+	if *migrateOnly {
+		if err := runMigrate(*configPath, log); err != nil {
+			log.Error("trino-goway: migrate fatal", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if err := run(*configPath, log); err != nil {
 		log.Error("trino-goway: fatal", "err", err)
 		os.Exit(1)
 	}
+}
+
+// runMigrate applies database migrations and exits, without starting any
+// listeners. It forces migration regardless of db.autoMigrate (running this is
+// an explicit request to migrate), reusing the same advisory-locked MigrateUp
+// path as normal startup so it is safe to run concurrently with booting
+// replicas. Used by the Helm chart's migrations.strategy=hook Job.
+func runMigrate(configPath string, log *slog.Logger) error {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("trino-goway: load config: %w", err)
+	}
+	if cfg.DB.Driver == "" {
+		return fmt.Errorf("trino-goway: --migrate-only requires db.driver to be configured")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	dbCfg := cfg.DB
+	dbCfg.AutoMigrate = true // force: the whole point of this invocation is to migrate
+	db, err := persistence.Open(ctx, dbCfg)
+	if err != nil {
+		return fmt.Errorf("trino-goway: migrate: %w", err)
+	}
+	_ = db.Close()
+
+	log.Info("trino-goway: migrations applied", "driver", cfg.DB.Driver, "mode", "migrate-only")
+	return nil
 }
 
 // run is the composition root. Returns the first fatal error or nil on clean exit.
