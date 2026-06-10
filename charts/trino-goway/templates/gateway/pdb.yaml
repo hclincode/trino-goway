@@ -1,0 +1,19 @@
+{{- $gw := .Values.trinoGoway -}}
+{{- /* Only meaningful when more than one replica can exist (static or via HPA). */ -}}
+{{- if and $gw.enabled $gw.podDisruptionBudget.enabled (or (gt (int $gw.replicaCount) 1) $gw.autoscaling.enabled) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "trino-goway.gateway.fullname" . }}
+  labels:
+    {{- include "trino-goway.gateway.labels" . | nindent 4 }}
+spec:
+  {{- if $gw.podDisruptionBudget.maxUnavailable }}
+  maxUnavailable: {{ $gw.podDisruptionBudget.maxUnavailable }}
+  {{- else }}
+  minAvailable: {{ $gw.podDisruptionBudget.minAvailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "trino-goway.gateway.selectorLabels" . | nindent 6 }}
+{{- end }}

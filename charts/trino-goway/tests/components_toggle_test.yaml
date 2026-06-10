@@ -1,0 +1,42 @@
+suite: component enable/disable toggles
+# gateway-only (routingService.enabled=false) and routing-only
+# (trinoGoway.enabled=false) installs.
+release:
+  name: rel
+  namespace: trino-goway
+# No suite-level `templates:` scope: gateway/deployment.yaml `include`s the
+# config templates, so the whole chart must render. Assertions target templates
+# explicitly.
+tests:
+  - it: gateway-only — routing-service Deployment is not rendered
+    set:
+      routingService.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/routing-service/deployment.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/gateway/deployment.yaml
+
+  - it: gateway-only — gateway does not auto-wire grpcAddr to a missing service
+    set:
+      routingService.enabled: false
+    template: templates/gateway/secret.yaml
+    asserts:
+      # With no routing-service and no explicit grpcAddr, the gateway must not
+      # point grpcAddr at an in-cluster Service that does not exist.
+      - notMatchRegex:
+          path: stringData["config.yaml"]
+          pattern: "grpcAddr:\\s*\"?rel-trino-goway-routing-service"
+
+  - it: routing-only — gateway Deployment is not rendered
+    set:
+      trinoGoway.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/gateway/deployment.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/routing-service/deployment.yaml

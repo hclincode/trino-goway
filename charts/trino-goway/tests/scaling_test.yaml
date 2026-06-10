@@ -1,0 +1,62 @@
+suite: scaling (HPA + PDB)
+# No suite-level `templates:` scope: gateway/deployment.yaml `include`s the
+# config templates for its checksum, so the whole chart must render. Each
+# assertion targets its template explicitly.
+release:
+  name: rel
+  namespace: trino-goway
+tests:
+  - it: no HPA is rendered by default
+    set:
+      trinoGoway.autoscaling.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/gateway/hpa.yaml
+
+  - it: HPA renders and the Deployment drops replicas when autoscaling is enabled
+    set:
+      trinoGoway.autoscaling.enabled: true
+      trinoGoway.autoscaling.minReplicas: 3
+      trinoGoway.autoscaling.maxReplicas: 12
+    asserts:
+      - isKind:
+          of: HorizontalPodAutoscaler
+        template: templates/gateway/hpa.yaml
+      - equal:
+          path: spec.minReplicas
+          value: 3
+        template: templates/gateway/hpa.yaml
+      - equal:
+          path: spec.maxReplicas
+          value: 12
+        template: templates/gateway/hpa.yaml
+      # When the HPA owns scaling, the Deployment must not pin replicas.
+      - notExists:
+          path: spec.replicas
+        template: templates/gateway/deployment.yaml
+
+  - it: routing-service HPA renders independently
+    set:
+      routingService.autoscaling.enabled: true
+    asserts:
+      - isKind:
+          of: HorizontalPodAutoscaler
+        template: templates/routing-service/hpa.yaml
+
+  - it: PDB renders by default (minAvailable 1)
+    template: templates/gateway/pdb.yaml
+    asserts:
+      - isKind:
+          of: PodDisruptionBudget
+      - equal:
+          path: spec.minAvailable
+          value: 1
+
+  - it: PDB is omitted when disabled
+    set:
+      trinoGoway.podDisruptionBudget.enabled: false
+    template: templates/gateway/pdb.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

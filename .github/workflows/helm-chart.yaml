@@ -1,0 +1,295 @@
+name: helm-chart
+
+# Validation for the umbrella Helm chart at charts/trino-goway/.
+#
+# Required gates (must stay green): helm lint, helm unittest, and a
+# `helm template | kubeconform -strict` matrix across the documented value
+# permutations. The kind install smoke is best-effort (continue-on-error):
+# it builds local images for the gateway + routing-service, loads them into a
+# kind cluster, installs the chart, and checks the gateway /trino-gateway/livez
+# probe and the routing-service gRPC health endpoint.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "charts/**"
+      - ".github/workflows/helm-chart.yaml"
+  pull_request:
+    paths:
+      - "charts/**"
+      - ".github/workflows/helm-chart.yaml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  CHART_DIR: charts/trino-goway
+  HELM_VERSION: v3.16.4
+  # kubeconform pulls CRD schemas (e.g. ServiceMonitor) that are not in the
+  # built-in Kubernetes catalog from the datree CRDs-catalog.
+  CRD_SCHEMA: "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+
+jobs:
+  lint-unittest:
+    name: helm lint + unittest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Install helm-unittest plugin
+        run: helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.7.2
+
+      - name: Build chart dependencies
+        run: helm dependency build "$CHART_DIR"
+
+      - name: helm lint (default values)
+        run: helm lint "$CHART_DIR"
+
+      - name: helm lint (bundled postgres + scaled)
+        run: |
+          helm lint "$CHART_DIR" \
+            --set postgresql.enabled=true \
+            --set trinoGoway.replicaCount=3 \
+            --set routingService.replicaCount=3 \
+            --set trinoGoway.autoscaling.enabled=true \
+            --set routingService.autoscaling.enabled=true
+
+      - name: helm unittest
+        run: helm unittest "$CHART_DIR"
+
+  kubeconform:
+    name: kubeconform (values matrix)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - name: default
+            args: ""
+          - name: scaled
+            args: >-
+              --set trinoGoway.replicaCount=3
+              --set routingService.replicaCount=3
+              --set trinoGoway.autoscaling.enabled=true
+              --set routingService.autoscaling.enabled=true
+          - name: ingress
+            # Default values ship a valid host+paths entry; overriding only
+            # hosts[0].host via --set would drop the default paths array.
+            args: >-
+              --set trinoGoway.ingress.enabled=true
+              --set trinoGoway.ingress.className=nginx
+          - name: hook-migrations
+            args: --set trinoGoway.migrations.strategy=hook
+          - name: servicemonitor
+            args: >-
+              --set trinoGoway.serviceMonitor.enabled=true
+              --set routingService.serviceMonitor.enabled=true
+          - name: networkpolicy
+            args: --set networkPolicy.enabled=true
+          - name: postgres
+            args: --set postgresql.enabled=true
+          - name: gateway-only
+            args: --set routingService.enabled=false
+          - name: routing-only
+            args: --set trinoGoway.enabled=false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL -o /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          sudo mv /tmp/kubeconform /usr/local/bin/
+
+      - name: Build chart dependencies
+        run: helm dependency build "$CHART_DIR"
+
+      - name: helm template | kubeconform (${{ matrix.scenario.name }})
+        run: |
+          helm template release "$CHART_DIR" ${{ matrix.scenario.args }} \
+            | kubeconform \
+                -strict \
+                -summary \
+                -verbose \
+                -kubernetes-version 1.29.0 \
+                -schema-location default \
+                -schema-location "$CRD_SCHEMA"
+
+  kind-smoke:
+    name: kind install smoke (best-effort)
+    runs-on: ubuntu-latest
+    # Best-effort: the chart's correctness gate is lint/unittest/kubeconform.
+    # This job builds real images and exercises a live install, but must never
+    # block the merge if cluster bring-up is flaky or an image build changes.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.3"
+          cache: false
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Build gateway + routing-service binaries
+        run: |
+          set -euo pipefail
+          # Webapp embed falls back to the in-code placeholder when web/dist holds
+          # only .gitkeep, so the gateway builds without the pnpm UI bundle.
+          CGO_ENABLED=0 GOOS=linux go build -o build/trino-goway ./cmd/trino-goway
+          ( cd routing-service && CGO_ENABLED=0 GOOS=linux go build -o ../build/routing-service ./cmd/routing-service )
+
+      - name: Build container images
+        run: |
+          set -euo pipefail
+          cat > build/Dockerfile.gateway <<'EOF'
+          FROM gcr.io/distroless/static:nonroot
+          COPY trino-goway /usr/local/bin/trino-goway
+          USER 65532:65532
+          ENTRYPOINT ["/usr/local/bin/trino-goway"]
+          EOF
+          cat > build/Dockerfile.routing <<'EOF'
+          FROM gcr.io/distroless/static:nonroot
+          COPY routing-service /usr/local/bin/routing-service
+          USER 65532:65532
+          ENTRYPOINT ["/usr/local/bin/routing-service"]
+          EOF
+          docker build -t trino-goway:ci -f build/Dockerfile.gateway build/
+          docker build -t routing-service:ci -f build/Dockerfile.routing build/
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: trino-goway-ci
+
+      - name: Load images into kind
+        run: |
+          docker pull postgres:16-alpine
+          kind load docker-image trino-goway:ci --name trino-goway-ci
+          kind load docker-image routing-service:ci --name trino-goway-ci
+          kind load docker-image postgres:16-alpine --name trino-goway-ci
+
+      - name: Deploy a plain Postgres for the gateway
+        run: |
+          # The gateway requires a database (db.driver) and runs goose migrations
+          # on boot. We provision a throwaway plain Postgres instead of the
+          # bundled Bitnami subchart to keep the smoke independent of external
+          # registry pulls. inline migrations exercise the advisory-lock path.
+          kubectl create namespace trino-goway
+          kubectl -n trino-goway apply -f - <<'EOF'
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata: { name: pg, labels: { app: pg } }
+          spec:
+            replicas: 1
+            selector: { matchLabels: { app: pg } }
+            template:
+              metadata: { labels: { app: pg } }
+              spec:
+                containers:
+                - name: pg
+                  image: postgres:16-alpine
+                  imagePullPolicy: IfNotPresent
+                  env:
+                  - { name: POSTGRES_USER, value: gw }
+                  - { name: POSTGRES_PASSWORD, value: gwpass }
+                  - { name: POSTGRES_DB, value: trino_gateway }
+                  ports: [{ containerPort: 5432 }]
+                  readinessProbe:
+                    exec: { command: ["pg_isready", "-U", "gw"] }
+                    periodSeconds: 3
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata: { name: pg }
+          spec:
+            selector: { app: pg }
+            ports: [{ port: 5432, targetPort: 5432 }]
+          EOF
+          kubectl -n trino-goway rollout status deploy/pg --timeout=120s
+
+      - name: helm install
+        run: |
+          set -euo pipefail
+          helm dependency build "$CHART_DIR"
+          # Both images are the locally loaded :ci tags (IfNotPresent) so kind
+          # never reaches a registry. The gateway points at the plain Postgres
+          # above; inline migrations create the schema under the advisory lock.
+          helm install ci "$CHART_DIR" \
+            --namespace trino-goway \
+            --set global.imageRegistry="" \
+            --set trinoGoway.image.registry="" \
+            --set trinoGoway.image.repository=trino-goway \
+            --set trinoGoway.image.tag=ci \
+            --set trinoGoway.image.pullPolicy=IfNotPresent \
+            --set trinoGoway.replicaCount=1 \
+            --set trinoGoway.config.db.driver=postgres \
+            --set trinoGoway.config.db.host=pg \
+            --set trinoGoway.config.db.user=gw \
+            --set trinoGoway.config.db.name=trino_gateway \
+            --set trinoGoway.config.db.sslmode=disable \
+            --set trinoGoway.secrets.dbPassword=gwpass \
+            --set trinoGoway.secrets.cookieSecret="$(openssl rand -hex 32)" \
+            --set trinoGoway.migrations.strategy=inline \
+            --set routingService.image.registry="" \
+            --set routingService.image.repository=routing-service \
+            --set routingService.image.tag=ci \
+            --set routingService.image.pullPolicy=IfNotPresent \
+            --set routingService.replicaCount=1 \
+            --wait --timeout 240s
+
+      - name: Wait for rollouts
+        run: |
+          kubectl -n trino-goway rollout status deploy -l app.kubernetes.io/instance=ci --timeout=180s || true
+          kubectl -n trino-goway get pods -o wide
+
+      - name: Probe gateway /trino-gateway/livez + readyz
+        run: |
+          set -euo pipefail
+          POD=$(kubectl -n trino-goway get pod \
+            -l app.kubernetes.io/component=gateway -o name | head -n1)
+          kubectl -n trino-goway port-forward "$POD" 8090:8090 &
+          PF=$!
+          sleep 5
+          curl -fsS http://127.0.0.1:8090/trino-gateway/livez
+          curl -fsS http://127.0.0.1:8090/trino-gateway/readyz
+          kill "$PF" || true
+
+      - name: Probe routing-service gRPC health
+        run: |
+          set -euo pipefail
+          go install github.com/grpc-ecosystem/grpc-health-probe@v0.4.34
+          POD=$(kubectl -n trino-goway get pod \
+            -l app.kubernetes.io/component=routing-service -o name | head -n1)
+          kubectl -n trino-goway port-forward "$POD" 9001:9001 &
+          PF=$!
+          sleep 5
+          "$(go env GOPATH)/bin/grpc-health-probe" -addr=127.0.0.1:9001
+          kill "$PF" || true
+
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: |
+          kubectl -n trino-goway get all
+          kubectl -n trino-goway describe pods
+          kubectl -n trino-goway logs -l app.kubernetes.io/instance=ci --all-containers --tail=200 || true

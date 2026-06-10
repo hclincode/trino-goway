@@ -1,0 +1,78 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy -}}
+{{- $grpcPort := (splitList ":" .Values.routingService.config.addr | last) | int -}}
+{{- $metricsPort := (splitList ":" .Values.routingService.config.metricsAddr | last) | int -}}
+{{- /*
+Once a NetworkPolicy selects a pod, all ingress not explicitly allowed is denied
+(default-deny per component). These policies open only the required ports:
+  clients   -> gateway proxy  :8080   (proxyFrom; empty = any source)
+  scrape/UI -> gateway admin  :8090   (metricsFrom; empty = any source)
+  gateway   -> routing gRPC   :9001
+  scrape    -> routing metrics:9091   (metricsFrom; empty = any source)
+*/ -}}
+{{- if .Values.trinoGoway.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "trino-goway.gateway.fullname" . }}
+  labels:
+    {{- include "trino-goway.gateway.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "trino-goway.gateway.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Trino clients -> proxy.
+    - ports:
+        - port: proxy
+          protocol: TCP
+      {{- with $np.proxyFrom }}
+      from:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    # Prometheus / UI / admin API -> admin port.
+    - ports:
+        - port: admin
+          protocol: TCP
+      {{- with $np.metricsFrom }}
+      from:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- if .Values.routingService.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "trino-goway.routingService.fullname" . }}
+  labels:
+    {{- include "trino-goway.routingService.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "trino-goway.routingService.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Gateway pods -> routing gRPC data-plane.
+    - ports:
+        - port: grpc
+          protocol: TCP
+      {{- if .Values.trinoGoway.enabled }}
+      from:
+        - podSelector:
+            matchLabels:
+              {{- include "trino-goway.gateway.selectorLabels" . | nindent 14 }}
+      {{- end }}
+    # Prometheus -> routing metrics.
+    - ports:
+        - port: metrics
+          protocol: TCP
+      {{- with $np.metricsFrom }}
+      from:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}

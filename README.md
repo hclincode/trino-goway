@@ -20,6 +20,7 @@ See [docs/USE_STORIES.md](docs/USE_STORIES.md) for what the gateway does and the
   - [Differential harness](#differential-harness)
 - [Testing](#testing)
 - [Database migrations](#database-migrations)
+- [Kubernetes (Helm)](#kubernetes-helm)
 
 ---
 
@@ -487,3 +488,35 @@ Migration files:
 |---|---|
 | `00001_create_gateway_backend.sql` | Backend registry table |
 | `00002_create_query_history.sql` | Query history table for sticky routing |
+
+---
+
+## Kubernetes (Helm)
+
+A Helm chart at [`charts/trino-goway/`](charts/trino-goway/) deploys the gateway
+and the routing-service as two independently-scalable workloads from a single
+values file (camelCase `trinoGoway:` and `routingService:` sections). See the
+[chart README](charts/trino-goway/README.md) for the full values reference,
+architecture, migration-strategy options, and the production checklist.
+
+```bash
+# Resolve the optional bundled-Postgres dependency.
+helm dependency build charts/trino-goway
+
+# Dev/demo: bundled Postgres, one replica of each component.
+helm install goway charts/trino-goway \
+  --namespace trino-goway --create-namespace \
+  --set postgresql.enabled=true
+
+# Production: external DB + BYO secrets via your own values file.
+helm install goway charts/trino-goway \
+  --namespace trino-goway --create-namespace \
+  --values my-values.yaml
+```
+
+The gateway's proxy listens on `:8080` (client-facing Service), the admin
+UI/API/metrics/probes on `:8090`, and the routing-service on `:9001` (gRPC).
+The gateway's `routing.external.grpcAddr` auto-wires to the in-cluster
+routing-service when unset. Chart validation (`helm lint`, `helm unittest`,
+`kubeconform`, and a best-effort kind install smoke) runs in
+[`.github/workflows/helm-chart.yaml`](.github/workflows/helm-chart.yaml).

@@ -1,0 +1,40 @@
+apiVersion: v2
+name: trino-goway
+description: |
+  Umbrella chart for the trino-goway Trino gateway and its companion
+  routing-service. Deploys the two as independently-scalable workloads from a
+  single values file (camelCase `trinoGoway:` and `routingService:` sections).
+type: application
+
+# Chart semver. Bump on every chart change (independent of appVersion).
+version: 0.1.0
+
+# Tracks the trino-goway / routing-service application release the chart targets.
+appVersion: "0.1.0"
+
+kubeVersion: ">=1.24.0-0"
+
+home: https://github.com/hclincode/trino-goway
+sources:
+  - https://github.com/hclincode/trino-goway
+  - https://github.com/hclincode/trino-goway/tree/main/routing-service
+
+keywords:
+  - trino
+  - gateway
+  - proxy
+  - routing
+  - presto
+
+maintainers:
+  - name: trino-goway maintainers
+    url: https://github.com/hclincode/trino-goway
+
+# Optional bundled Postgres for dev/demo only (R8). Disabled by default; the
+# production path is an external database. `helm dependency build` resolves it
+# when postgresql.enabled=true.
+dependencies:
+  - name: postgresql
+    version: ">=16.0.0 <17.0.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled

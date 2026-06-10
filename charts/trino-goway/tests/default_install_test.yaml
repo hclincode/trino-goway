@@ -1,0 +1,131 @@
+suite: default install
+# Default values: both components enabled, two replicas each, ClusterIP proxy,
+# inline migrations, NOOP auth, chart-managed Secret.
+release:
+  name: rel
+  namespace: trino-goway
+# No suite-level `templates:` scope: gateway/deployment.yaml `include`s the
+# config + secret templates for its checksums, so the whole chart must render.
+# Each assertion targets its template explicitly.
+tests:
+  - it: renders the gateway Deployment with two replicas and both ports
+    template: templates/gateway/deployment.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: rel-trino-goway-gateway
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.template.spec.containers[0].ports[?(@.containerPort==8080)].name
+          value: proxy
+      - exists:
+          path: spec.template.spec.containers[0].ports[?(@.containerPort==8090)]
+      # config lives in the Secret, so a checksum/secret rolls the pods; a
+      # checksum/config tracks the audit ConfigMap too.
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/secret"]
+          pattern: ^[a-f0-9]{64}$
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/config"]
+          pattern: ^[a-f0-9]{64}$
+
+  - it: gateway liveness/readiness probe the admin port on the trino-gateway paths
+    template: templates/gateway/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /trino-gateway/livez
+      # The admin listener is referenced by its named container port.
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: admin
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /trino-gateway/readyz
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: admin
+
+  - it: gateway runs non-root with a read-only root filesystem
+    template: templates/gateway/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: mounts the gateway config from the Secret (config carries inline secrets)
+    template: templates/gateway/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[?(@.name=="config")].secret.secretName
+          value: rel-trino-goway-gateway-secret
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="PGPASSWORD")].valueFrom.secretKeyRef.name
+          value: rel-trino-goway-gateway-secret
+
+  - it: renders the two gateway Services (proxy + admin)
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: templates/gateway/service-proxy.yaml
+      - equal:
+          path: spec.ports[0].port
+          value: 8080
+        template: templates/gateway/service-proxy.yaml
+      - equal:
+          path: spec.type
+          value: ClusterIP
+        template: templates/gateway/service-proxy.yaml
+      - equal:
+          path: spec.ports[0].port
+          value: 8090
+        template: templates/gateway/service-admin.yaml
+
+  - it: renders the routing-service Deployment with three ports
+    template: templates/routing-service/deployment.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: rel-trino-goway-routing-service
+      - equal:
+          path: spec.replicas
+          value: 2
+      - exists:
+          path: spec.template.spec.containers[0].ports[?(@.containerPort==9001)]
+      - exists:
+          path: spec.template.spec.containers[0].ports[?(@.containerPort==9091)]
+      - exists:
+          path: spec.template.spec.containers[0].ports[?(@.containerPort==9092)]
+
+  - it: routing-service uses the native gRPC probe on the data-plane port
+    template: templates/routing-service/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.grpc.port
+          value: 9001
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.grpc.port
+          value: 9001
+
+  - it: renders the routing-service gRPC and metrics Services
+    asserts:
+      - equal:
+          path: spec.ports[0].port
+          value: 9001
+        template: templates/routing-service/service-grpc.yaml
+      - equal:
+          path: spec.ports[0].port
+          value: 9091
+        template: templates/routing-service/service-metrics.yaml

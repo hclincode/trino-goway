@@ -1,0 +1,72 @@
+trino-goway has been deployed as release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+
+{{- if .Values.trinoGoway.enabled }}
+
+Gateway (trino-goway)
+─────────────────────
+Trino clients connect to the proxy Service:
+
+  {{ include "trino-goway.gateway.fullname" . }}-proxy : {{ .Values.trinoGoway.service.proxy.port }}
+
+{{- if eq .Values.trinoGoway.service.proxy.type "ClusterIP" }}
+  # ClusterIP — reach it from inside the cluster, or port-forward to test:
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "trino-goway.gateway.fullname" . }}-proxy {{ .Values.trinoGoway.service.proxy.port }}:{{ .Values.trinoGoway.service.proxy.port }}
+{{- else if eq .Values.trinoGoway.service.proxy.type "LoadBalancer" }}
+  # LoadBalancer — wait for the external IP:
+  kubectl --namespace {{ .Release.Namespace }} get svc {{ include "trino-goway.gateway.fullname" . }}-proxy -w
+{{- end }}
+
+Admin API / Web UI / metrics / probes (internal ClusterIP, port {{ .Values.trinoGoway.service.admin.port }}):
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "trino-goway.gateway.fullname" . }}-admin {{ .Values.trinoGoway.service.admin.port }}:{{ .Values.trinoGoway.service.admin.port }}
+  # then open http://localhost:{{ .Values.trinoGoway.service.admin.port }}/trino-gateway
+  #   liveness:  /trino-gateway/livez
+  #   readiness: /trino-gateway/readyz
+  #   metrics:   {{ .Values.trinoGoway.config.metrics.path }}
+
+{{- if .Values.trinoGoway.ingress.enabled }}
+
+Ingress is enabled:
+{{- range .Values.trinoGoway.ingress.hosts }}
+  http{{ if $.Values.trinoGoway.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- end }}
+
+{{- $secrets := .Values.trinoGoway.secrets }}
+{{- if and (not .Values.trinoGoway.existingSecret) (not $secrets.cookieSecret) }}
+
+WARNING: cookie.secret is empty. Sticky multi-statement routing requires a
+stable HMAC secret shared across all gateway replicas. Set
+trinoGoway.secrets.cookieSecret (openssl rand -hex 32) or trinoGoway.existingSecret.
+{{- end }}
+
+Migration strategy: {{ .Values.trinoGoway.migrations.strategy }}
+{{- if eq .Values.trinoGoway.migrations.strategy "hook" }}
+  A pre-install/pre-upgrade Job applies migrations once; replicas boot with
+  db.autoMigrate=false.
+{{- else if eq .Values.trinoGoway.migrations.strategy "disabled" }}
+  Migrations are NOT run by the chart — apply them out-of-band before scaling.
+{{- end }}
+{{- end }}
+
+{{- if .Values.routingService.enabled }}
+
+routing-service
+───────────────
+gRPC data-plane (the gateway connects here):
+
+  {{ include "trino-goway.routingService.fullname" . }} : {{ .Values.routingService.service.grpc.port }}
+
+  # gRPC health check:
+  grpc_health_probe -addr {{ include "trino-goway.routingService.fullname" . }}:{{ .Values.routingService.service.grpc.port }}
+
+  metrics: {{ include "trino-goway.routingService.fullname" . }}-metrics : {{ .Values.routingService.service.metrics.port }}
+{{- else }}
+
+routing-service is DISABLED. The gateway routes every request to its
+defaultGroup unless trinoGoway.config.routing.external.grpcAddr / .url points at
+an external router.
+{{- end }}
+
+Run `helm test {{ .Release.Name }}` (if test hooks are installed) or check rollout:
+  kubectl --namespace {{ .Release.Namespace }} rollout status deploy/{{ include "trino-goway.gateway.fullname" . }}

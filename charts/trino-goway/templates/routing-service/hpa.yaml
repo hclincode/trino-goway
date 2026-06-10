@@ -1,0 +1,33 @@
+{{- if and .Values.routingService.enabled .Values.routingService.autoscaling.enabled }}
+{{- $a := .Values.routingService.autoscaling -}}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "trino-goway.routingService.fullname" . }}
+  labels:
+    {{- include "trino-goway.routingService.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "trino-goway.routingService.fullname" . }}
+  minReplicas: {{ $a.minReplicas }}
+  maxReplicas: {{ $a.maxReplicas }}
+  metrics:
+    {{- if $a.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $a.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if $a.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ $a.targetMemoryUtilizationPercentage }}
+    {{- end }}
+{{- end }}

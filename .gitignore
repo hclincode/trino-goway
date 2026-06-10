@@ -37,12 +37,19 @@ go.work.sum
 # Local Claude tooling — share .claude/settings.json, keep personal overrides local
 .claude/settings.local.json
 
-# Compiled binaries (built locally)
-goway-migrate-config
-goway-diff-harness
-mock-external-router
-mock-external-router-grpc
-trino-goway
+# Compiled binaries (built locally). Anchored to repo root with a leading "/"
+# so they do not also ignore same-named directories like cmd/trino-goway or
+# charts/trino-goway.
+/goway-migrate-config
+/goway-diff-harness
+/mock-external-router
+/mock-external-router-grpc
+/trino-goway
+
+# Helm chart vendored dependencies. Chart.lock is committed (pins resolved
+# versions); the downloaded subchart .tgz + unpacked dir are fetched on demand
+# via `helm dependency build` (CI and local), so they are not tracked.
+charts/*/charts/
 
 # Web UI build output copied into the Go embed dir by `make webapp`.
 # Only the .gitkeep is tracked; the built bundle (index.html, assets, logo) is

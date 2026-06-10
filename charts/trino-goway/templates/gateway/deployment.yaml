@@ -1,0 +1,130 @@
+{{- if .Values.trinoGoway.enabled }}
+{{- $gw := .Values.trinoGoway -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "trino-goway.gateway.fullname" . }}
+  labels:
+    {{- include "trino-goway.gateway.labels" . | nindent 4 }}
+spec:
+  {{- if not $gw.autoscaling.enabled }}
+  replicas: {{ $gw.replicaCount }}
+  {{- end }}
+  strategy:
+    {{- toYaml $gw.updateStrategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "trino-goway.gateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/gateway/configmap.yaml") . | sha256sum }}
+        {{- if not $gw.existingSecret }}
+        checksum/secret: {{ include (print $.Template.BasePath "/gateway/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if $gw.metrics.podAnnotations }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ $gw.config.admin.port | quote }}
+        prometheus.io/path: {{ $gw.config.metrics.path | quote }}
+        {{- end }}
+        {{- with $gw.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "trino-goway.gateway.selectorLabels" . | nindent 8 }}
+        {{- with $gw.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with (include "trino-goway.imagePullSecrets" (dict "global" .Values.global "component" $gw) | trim) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      serviceAccountName: {{ include "trino-goway.gateway.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml $gw.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ $gw.terminationGracePeriodSeconds }}
+      {{- with $gw.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $gw.affinity }}
+      affinity:
+        {{- toYaml $gw.affinity | nindent 8 }}
+      {{- else if $gw.podAntiAffinity }}
+      affinity:
+        {{- include "trino-goway.podAntiAffinity" (dict "mode" $gw.podAntiAffinity "selectorLabels" (include "trino-goway.gateway.selectorLabels" .)) | nindent 8 }}
+      {{- end }}
+      {{- with $gw.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $gw.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: gateway
+          image: {{ include "trino-goway.image" (dict "image" $gw.image "global" .Values.global "chart" .Chart) }}
+          imagePullPolicy: {{ $gw.image.pullPolicy }}
+          args:
+            - --config
+            - /etc/trino-goway/config.yaml
+          ports:
+            - name: proxy
+              containerPort: {{ $gw.config.proxy.port }}
+              protocol: TCP
+            - name: admin
+              containerPort: {{ $gw.config.admin.port }}
+              protocol: TCP
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "trino-goway.gateway.secretName" . }}
+                  key: db-password
+                  optional: true
+            {{- with $gw.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /trino-gateway/readyz
+              port: admin
+            failureThreshold: 30
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /trino-gateway/livez
+              port: admin
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /trino-gateway/readyz
+              port: admin
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml $gw.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml $gw.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/trino-goway
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ include "trino-goway.gateway.secretName" . }}
+            items:
+              - key: config.yaml
+                path: config.yaml
+            defaultMode: 0440
+        - name: tmp
+          emptyDir: {}
+{{- end }}

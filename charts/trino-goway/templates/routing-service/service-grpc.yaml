@@ -1,0 +1,31 @@
+{{- if .Values.routingService.enabled }}
+{{- $svc := .Values.routingService.service.grpc -}}
+{{- /*
+gRPC data-plane Service — the gateway connects here (routing.external.grpcAddr).
+Set service.grpc.headless=true (clusterIP: None) for client-side gRPC load
+balancing across pods. appProtocol: grpc hints L7-aware meshes/ingresses.
+*/ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "trino-goway.routingService.fullname" . }}
+  labels:
+    {{- include "trino-goway.routingService.labels" . | nindent 4 }}
+  {{- with $svc.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  {{- if $svc.headless }}
+  clusterIP: None
+  {{- end }}
+  selector:
+    {{- include "trino-goway.routingService.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: grpc
+      port: {{ $svc.port }}
+      targetPort: grpc
+      protocol: TCP
+      appProtocol: grpc
+{{- end }}

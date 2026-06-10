@@ -1,0 +1,31 @@
+{{- if and .Values.routingService.enabled .Values.routingService.serviceMonitor.enabled }}
+{{- $sm := .Values.routingService.serviceMonitor -}}
+{{- /* ServiceMonitor scraping the routing-service metrics Service (:9091/metrics). */ -}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "trino-goway.routingService.fullname" . }}
+  labels:
+    {{- include "trino-goway.routingService.labels" . | nindent 4 }}
+    {{- with $sm.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "trino-goway.routingService.selectorLabels" . | nindent 6 }}
+      trino-goway.io/endpoint: metrics
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ $sm.interval }}
+      scrapeTimeout: {{ $sm.scrapeTimeout }}
+      {{- with $sm.relabelings }}
+      relabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $sm.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

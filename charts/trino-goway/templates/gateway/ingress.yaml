@@ -1,0 +1,39 @@
+{{- if and .Values.trinoGoway.enabled .Values.trinoGoway.ingress.enabled }}
+{{- $gw := .Values.trinoGoway -}}
+{{- $fullname := include "trino-goway.gateway.fullname" . -}}
+{{- $proxyPort := $gw.service.proxy.port -}}
+{{- $adminPort := $gw.service.admin.port -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "trino-goway.gateway.labels" . | nindent 4 }}
+  {{- with $gw.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with $gw.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with $gw.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range $gw.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ $fullname }}-{{ .backend | default "proxy" }}
+                port:
+                  number: {{ if eq (.backend | default "proxy") "admin" }}{{ $adminPort }}{{ else }}{{ $proxyPort }}{{ end }}
+          {{- end }}
+    {{- end }}
+{{- end }}

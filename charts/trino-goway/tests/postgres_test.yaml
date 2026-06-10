@@ -1,0 +1,77 @@
+suite: bundled Postgres (dev/demo) + DSN assembly
+# DSN is assembled into config.yaml (in the Secret) from structured db fields;
+# the password is never baked into the DSN (injected via PGPASSWORD). When the
+# bundled postgresql subchart is enabled, the DB host derives from its Service.
+release:
+  name: rel
+  namespace: trino-goway
+# No suite-level `templates:` scope: the bundled-image test asserts against the
+# postgresql subchart's StatefulSet, so the whole chart (incl. subchart) must
+# render. The DSN tests scope themselves to the gateway Secret via `template:`.
+tests:
+  - it: assembles a libpq DSN from structured db fields by default (no password)
+    set:
+      trinoGoway.config.db.host: pg.db.svc
+      trinoGoway.config.db.name: trino_gateway
+      trinoGoway.config.db.user: gateway
+      trinoGoway.config.db.sslmode: require
+    template: templates/gateway/secret.yaml
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "host=pg.db.svc port=5432 dbname=trino_gateway user=gateway sslmode=require"
+      # The password is never baked into the DSN.
+      - notMatchRegex:
+          path: stringData["config.yaml"]
+          pattern: "password="
+
+  - it: derives the DB host from the bundled subchart Service when postgresql.enabled
+    # Regression guard: the bundled DSN host MUST equal the Bitnami primary
+    # Service name `<release>-postgresql` (rel-postgresql), NOT the gateway
+    # fullname-derived `rel-trino-goway-postgresql` (the original bug).
+    set:
+      postgresql.enabled: true
+      trinoGoway.config.db.host: ""
+    template: templates/gateway/secret.yaml
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "host=rel-postgresql port=5432"
+      - notMatchRegex:
+          path: stringData["config.yaml"]
+          pattern: "host=rel-trino-goway-postgresql"
+
+  - it: honors postgresql.fullnameOverride for the bundled DB host
+    set:
+      postgresql.enabled: true
+      postgresql.fullnameOverride: mypg
+      trinoGoway.config.db.host: ""
+    template: templates/gateway/secret.yaml
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "host=mypg port=5432"
+
+  - it: an explicit dsn overrides structured assembly
+    set:
+      trinoGoway.config.db.dsn: "host=custom port=6432 dbname=x user=y sslmode=disable"
+    template: templates/gateway/secret.yaml
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "host=custom port=6432"
+
+  - it: bundled Postgres defaults to the bitnamilegacy image archive (dev/demo)
+    # Bitnami delisted the original `bitnami/postgresql` tags in their 2025
+    # image migration, so the chart defaults the bundled subchart to the frozen
+    # `bitnamilegacy` archive — keeping `--set postgresql.enabled=true` working
+    # out of the box. (StatefulSet comes from the postgresql subchart.)
+    set:
+      postgresql.enabled: true
+    template: charts/postgresql/templates/primary/statefulset.yaml
+    asserts:
+      - isKind:
+          of: StatefulSet
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "bitnamilegacy/postgresql"

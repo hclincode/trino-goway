@@ -1,0 +1,46 @@
+suite: gateway -> routing-service wiring + camelCase values
+# The full gateway config.yaml is rendered into the Secret (it carries inline
+# secrets); the ConfigMap is a redacted audit copy. Non-secret config is asserted
+# against the Secret per the chart's secret-config model.
+release:
+  name: rel
+  namespace: trino-goway
+templates:
+  - templates/gateway/secret.yaml
+tests:
+  - it: auto-wires routing.external.grpcAddr to the in-cluster routing-service
+    template: templates/gateway/secret.yaml
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "grpcAddr:\\s*\"?rel-trino-goway-routing-service:9001\"?"
+
+  - it: honors an explicit grpcAddr override (external router) over auto-wiring
+    set:
+      trinoGoway.config.routing.external.grpcAddr: "router.example.com:9001"
+    template: templates/gateway/secret.yaml
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "grpcAddr:\\s*\"?router.example.com:9001\"?"
+      - notMatchRegex:
+          path: stringData["config.yaml"]
+          pattern: "rel-trino-goway-routing-service"
+
+  - it: camelCase value access flows into the rendered config (dot-access, no index)
+    # Set deep camelCase keys and confirm they reach config.yaml unchanged.
+    set:
+      trinoGoway.config.proxy.port: 18080
+      trinoGoway.config.clusterStats.monitorType: METRICS
+      trinoGoway.config.routing.defaultGroup: analytics
+    template: templates/gateway/secret.yaml
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "port:\\s*18080"
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "monitorType:\\s*\"?METRICS\"?"
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "defaultGroup:\\s*\"?analytics\"?"

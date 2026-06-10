@@ -1,0 +1,423 @@
+# Default values for the trino-goway umbrella chart.
+#
+# Two component sections — camelCase, dot-accessible everywhere (R2):
+#   trinoGoway:     the gateway (proxy :8080 + admin/UI/metrics :8090)
+#   routingService: the external routing-service (gRPC :9001, metrics :9091, admin :9092)
+# plus a shared `global:` block and optional bundled `postgresql:` (dev only).
+
+# ---------------------------------------------------------------------------
+# global — shared across both components and any subcharts.
+# ---------------------------------------------------------------------------
+global:
+  # Registry prefix applied to every image unless the component overrides
+  # image.registry. Empty means use each image's own registry field.
+  imageRegistry: ""
+  # Pull secrets merged into both Deployments (and subcharts).
+  imagePullSecrets: []
+  # Labels added to every rendered object.
+  commonLabels: {}
+  # StorageClass passed to subcharts (e.g. bundled postgresql).
+  storageClass: ""
+
+# ===========================================================================
+# trinoGoway — the gateway workload
+# ===========================================================================
+trinoGoway:
+  enabled: true
+  replicaCount: 2
+
+  image:
+    registry: ghcr.io
+    # NOTE: placeholder repository — set to your published gateway image.
+    repository: hclincode/trino-goway
+    tag: ""            # defaults to .Chart.AppVersion when empty
+    pullPolicy: IfNotPresent
+
+  # Extra image pull secrets (merged with global.imagePullSecrets).
+  imagePullSecrets: []
+
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+  podAnnotations: {}
+  podLabels: {}
+
+  # Pod-level security context (non-root).
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Container-level security context (read-only rootfs, drop all caps).
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    capabilities:
+      drop:
+        - ALL
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+  # Scheduling.
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # When affinity is empty, a soft pod anti-affinity (spread replicas across
+  # nodes) is applied automatically. Set podAntiAffinity to "hard" to require it,
+  # or "" to disable the default.
+  podAntiAffinity: soft
+  topologySpreadConstraints: []
+
+  # ~30s graceful proxy drain (matches the gateway's shutdown deadline).
+  terminationGracePeriodSeconds: 40
+
+  # Extra environment variables (list of corev1.EnvVar).
+  extraEnv: []
+
+  # RollingUpdate tuning.
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 0   # 0 disables the memory metric
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+    maxUnavailable: ""
+
+  # ----- Services (R4) -----
+  service:
+    # Client-facing proxy :8080.
+    proxy:
+      type: ClusterIP            # LoadBalancer | NodePort | ClusterIP
+      port: 8080
+      nodePort: ""
+      annotations: {}
+      externalTrafficPolicy: ""  # e.g. Local for LB source-IP preservation
+      loadBalancerSourceRanges: []
+    # Internal admin/UI/metrics/probes :8090.
+    admin:
+      type: ClusterIP
+      port: 8090
+      annotations: {}
+
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    # Which backend each host/path targets: "proxy" (default) or "admin".
+    hosts:
+      - host: trino-goway.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: proxy
+    tls: []
+
+  serviceMonitor:
+    enabled: false
+    # Scrape interval / timeout (Prometheus-Operator).
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+    relabelings: []
+    metricRelabelings: []
+  # Pod scrape annotations (non-Operator fallback). Added to the pod when true.
+  metrics:
+    podAnnotations: true
+
+  # ----- Migrations (R3) -----
+  # strategy: inline | hook | disabled
+  #   inline   — every replica runs migrations on boot; a DB advisory lock
+  #              (HC-9) serializes them. No Job. (default, safe)
+  #   hook     — a pre-install/pre-upgrade Job migrates once; replicas skip
+  #              migrations (db.autoMigrate=false).
+  #   disabled — nobody migrates from the chart (operator runs them out-of-band).
+  migrations:
+    strategy: inline
+    # Resources/backoff for the hook Job (strategy=hook).
+    backoffLimit: 3
+    resources: {}
+    podAnnotations: {}
+
+  # ----- Gateway config.yaml (rendered into a ConfigMap; R7/R9) -----
+  # Non-secret fields only. Secrets live under .secrets / existingSecret.
+  config:
+    proxy:
+      port: 8080
+      responseSize: 1MiB
+      requestTimeout: 30s
+      propagateErrors: false
+    admin:
+      port: 8090
+    monitor:
+      interval: 30s
+      checkTimeout: 5s
+      refreshInterval: 15s
+      statsTimeout: 10s
+      retries: 0
+      metricsEndpoint: /metrics
+      runningQueriesMetricName: trino_execution_name_QueryManager_RunningQueries
+      queuedQueriesMetricName: trino_execution_name_QueryManager_QueuedQueries
+      metricMinimumValues:
+        trino_metadata_name_DiscoveryNodeManager_ActiveNodeCount: 1
+      metricMaximumValues: {}
+    clusterStats:
+      monitorType: INFO_API     # NOOP | INFO_API | UI_API | METRICS
+    backendState:
+      username: ""
+      # password is a secret -> .Values.trinoGoway.secrets.backendStatePassword
+      ssl: false
+      xForwardedProtoHeader: false
+    db:
+      driver: postgres          # postgres | mysql | "" (no persistence)
+      # autoMigrate is templated from migrations.strategy (do not set here).
+      # DSN assembly (R8): leave dsn empty to build a libpq DSN from the
+      # structured fields below + the password Secret; set dsn to override.
+      dsn: ""
+      host: ""
+      port: 5432
+      name: trino_gateway
+      user: gw
+      sslmode: disable
+    routing:
+      defaultGroup: default
+      type: EXTERNAL
+      external:
+        # Auto-wired to <release>-routing-service:9001 when empty and
+        # routingService.enabled (R4). Set explicitly to point at an external
+        # router. Mutually exclusive with url.
+        grpcAddr: ""
+        url: ""
+        timeout: 1s
+        excludeHeaders:
+          - Authorization
+          - X-Trino-Client-Secret
+    auth:
+      type: NOOP                # NOOP | OIDC | LDAP
+      oidc:
+        issuerUrl: ""
+        clientId: ""
+        # clientSecret -> .Values.trinoGoway.secrets.oidcClientSecret
+        jwksUrl: ""
+        jwksTtlSecs: 300
+        scopes:
+          - openid
+          - profile
+          - email
+        redirectUrl: ""
+        authorizationEndpoint: ""
+        tokenEndpoint: ""
+      ldap:
+        url: ""
+        bindDn: ""
+        # bindPassword -> .Values.trinoGoway.secrets.ldapBindPassword
+        userBase: ""
+        userAttr: uid
+      authorization:
+        admin: ""
+        user: ""
+        api: ""
+        pagePermissions: {}
+    ui:
+      disablePages: []
+    cookie:
+      # secret -> .Values.trinoGoway.secrets.cookieSecret (HMAC, shared+stable)
+      ttl: 10m
+      wireCompat: true
+    metrics:
+      enabled: true
+      path: /metrics
+
+  # ----- Secrets (R7) -----
+  # Provide values here to have the chart create a Secret, OR set existingSecret
+  # to the name of a pre-existing Secret (BYO; external-secrets/Vault) whose keys
+  # match: db-password, cookie-secret, oidc-client-secret, ldap-bind-password,
+  # backend-state-password.
+  existingSecret: ""
+  secrets:
+    dbPassword: ""
+    cookieSecret: ""            # REQUIRED; generate: openssl rand -hex 32
+    oidcClientSecret: ""
+    ldapBindPassword: ""
+    backendStatePassword: ""
+
+# ===========================================================================
+# routingService — the external routing-service workload
+# ===========================================================================
+routingService:
+  enabled: true
+  replicaCount: 2
+
+  image:
+    registry: ghcr.io
+    # NOTE: placeholder repository — set to your published routing-service image.
+    repository: hclincode/trino-goway-routing-service
+    tag: ""            # defaults to .Chart.AppVersion when empty
+    pullPolicy: IfNotPresent
+
+  imagePullSecrets: []
+
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+  podAnnotations: {}
+  podLabels: {}
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    capabilities:
+      drop:
+        - ALL
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAntiAffinity: soft
+  topologySpreadConstraints: []
+
+  terminationGracePeriodSeconds: 30
+
+  extraEnv: []
+
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 0
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+    maxUnavailable: ""
+
+  # ----- Health probes (R6) -----
+  # useGrpcProbe: native k8s gRPC probe on :9001 (k8s >=1.24). Set false to use
+  # the grpc_health_probe exec fallback (binary must be in the image).
+  probes:
+    useGrpcProbe: true
+    grpcHealthProbePath: /bin/grpc_health_probe
+
+  # ----- Services (R4) -----
+  service:
+    grpc:
+      port: 9001
+      # headless (clusterIP: None) enables client-side gRPC load balancing.
+      headless: false
+      annotations: {}
+    metrics:
+      port: 9091
+      annotations: {}
+
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+    relabelings: []
+    metricRelabelings: []
+  metrics:
+    podAnnotations: true
+
+  # ----- routing-service config.yaml (rendered into a ConfigMap; R9) -----
+  config:
+    addr: ":9001"
+    metricsAddr: ":9091"
+    adminAddr: ":9092"
+    # OTLP/gRPC trace collector (e.g. otel-collector:4317). Empty disables export.
+    tracingEndpoint: ""
+    defaultRoutingGroup: default
+    sqlParsing:
+      enabled: true
+      maxBodyBytes: 262144
+    # Ordered routing methods (expr/Starlark). Rendered verbatim into the
+    # ConfigMap and hot-reloaded. Each entry sets exactly one of program/file.
+    methods:
+      - type: expr
+        program: |
+          request.source == "airflow" ? "etl"
+            : request.parse_ok && request.query_category == "WRITE" ? "etl"
+            : request.parse_ok && "hive" in request.catalogs ? "warehouse"
+            : "tier=premium" in request.client_tags ? "premium"
+            : ""
+
+  # ----- Secrets (R7) -----
+  # Phase-1 gRPC is insecure; this is a placeholder for future mTLS certs.
+  existingSecret: ""
+  secrets: {}
+
+# ===========================================================================
+# networkPolicy (R-cross-cutting; HC-8) — default-deny + explicit allows.
+# ===========================================================================
+networkPolicy:
+  enabled: false
+  # Selector for pods allowed to reach the proxy :8080 (clients). Empty = allow
+  # from any pod in the namespace; set to {} ingress rule with namespaceSelector
+  # via extraProxyIngress for cross-namespace.
+  proxyFrom: []
+  # Selector for metrics/admin scrapers (Prometheus).
+  metricsFrom: []
+
+# ===========================================================================
+# postgresql — bundled Bitnami subchart for dev/demo ONLY (R8). Off by default.
+# ===========================================================================
+postgresql:
+  enabled: false
+  # Bitnami delisted docker.io/bitnami/postgresql from Docker Hub (Aug-2025
+  # migration to bitnamilegacy/*), so the subchart's pinned image now
+  # ImagePullBackOffs. Point at the relocated image so the dev/demo path works
+  # out-of-box (registry docker.io + the subchart's tag pass through unchanged).
+  image:
+    repository: bitnamilegacy/postgresql
+  auth:
+    username: gw
+    password: ""
+    database: trino_gateway
+  architecture: standalone

@@ -1,0 +1,140 @@
+{{- if .Values.routingService.enabled }}
+{{- $rs := .Values.routingService -}}
+{{- /* Derive container ports from the listen-address strings (":9001" -> 9001). */ -}}
+{{- $grpcPort := (splitList ":" $rs.config.addr | last) | int -}}
+{{- $metricsPort := (splitList ":" $rs.config.metricsAddr | last) | int -}}
+{{- $adminPort := (splitList ":" $rs.config.adminAddr | last) | int -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "trino-goway.routingService.fullname" . }}
+  labels:
+    {{- include "trino-goway.routingService.labels" . | nindent 4 }}
+spec:
+  {{- if not $rs.autoscaling.enabled }}
+  replicas: {{ $rs.replicaCount }}
+  {{- end }}
+  strategy:
+    {{- toYaml $rs.updateStrategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "trino-goway.routingService.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/routing-service/configmap.yaml") . | sha256sum }}
+        {{- if $rs.metrics.podAnnotations }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ $metricsPort | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
+        {{- with $rs.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "trino-goway.routingService.selectorLabels" . | nindent 8 }}
+        {{- with $rs.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with (include "trino-goway.imagePullSecrets" (dict "global" .Values.global "component" $rs) | trim) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      serviceAccountName: {{ include "trino-goway.routingService.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml $rs.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ $rs.terminationGracePeriodSeconds }}
+      {{- with $rs.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $rs.affinity }}
+      affinity:
+        {{- toYaml $rs.affinity | nindent 8 }}
+      {{- else if $rs.podAntiAffinity }}
+      affinity:
+        {{- include "trino-goway.podAntiAffinity" (dict "mode" $rs.podAntiAffinity "selectorLabels" (include "trino-goway.routingService.selectorLabels" .)) | nindent 8 }}
+      {{- end }}
+      {{- with $rs.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $rs.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: routing-service
+          image: {{ include "trino-goway.image" (dict "image" $rs.image "global" .Values.global "chart" .Chart) }}
+          imagePullPolicy: {{ $rs.image.pullPolicy }}
+          args:
+            - --config
+            - /etc/routing-service/config.yaml
+          ports:
+            - name: grpc
+              containerPort: {{ $grpcPort }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ $metricsPort }}
+              protocol: TCP
+            - name: admin-grpc
+              containerPort: {{ $adminPort }}
+              protocol: TCP
+          {{- with $rs.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if $rs.probes.useGrpcProbe }}
+          startupProbe:
+            grpc:
+              port: {{ $grpcPort }}
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            grpc:
+              port: {{ $grpcPort }}
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            grpc:
+              port: {{ $grpcPort }}
+            periodSeconds: 10
+            failureThreshold: 3
+          {{- else }}
+          startupProbe:
+            exec:
+              command: ["{{ $rs.probes.grpcHealthProbePath }}", "-addr=:{{ $grpcPort }}"]
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            exec:
+              command: ["{{ $rs.probes.grpcHealthProbePath }}", "-addr=:{{ $grpcPort }}"]
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["{{ $rs.probes.grpcHealthProbePath }}", "-addr=:{{ $grpcPort }}"]
+            periodSeconds: 10
+            failureThreshold: 3
+          {{- end }}
+          resources:
+            {{- toYaml $rs.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml $rs.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/routing-service
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "trino-goway.routingService.fullname" . }}
+            items:
+              - key: config.yaml
+                path: config.yaml
+        - name: tmp
+          emptyDir: {}
+{{- end }}

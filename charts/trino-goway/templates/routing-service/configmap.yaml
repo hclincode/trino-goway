@@ -1,0 +1,17 @@
+{{- if .Values.routingService.enabled }}
+{{- /*
+routing-service config.yaml. The `methods:` expr/Starlark rule bodies are
+hot-reloaded by the service (fsnotify), so editing the ConfigMap re-applies rules
+without a restart; the checksum/config annotation still rolls the pods so other
+config changes (addr, sqlParsing, …) take effect.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "trino-goway.routingService.fullname" . }}
+  labels:
+    {{- include "trino-goway.routingService.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+{{ include "trino-goway.routingService.configYaml" . | indent 4 }}
+{{- end }}

@@ -1,0 +1,193 @@
+{{- /*
+  Source template for README.md — regenerate after editing values.yaml with:
+
+      helm-docs --chart-search-root=charts/trino-goway
+
+  helm-docs renders the values table below from the `# --` comments in
+  values.yaml. Hand-written prose lives here; do not edit README.md directly.
+*/ -}}
+# {{ template "chart.name" . }}
+
+{{ template "chart.versionBadge" . }}{{ template "chart.typeBadge" . }}{{ template "chart.appVersionBadge" . }}
+
+{{ template "chart.description" . }}
+
+## What this chart deploys
+
+`trino-goway` is an umbrella chart that installs **two independently-scalable
+workloads** from a single values file:
+
+| Component | Values key | Role | Ports |
+|-----------|------------|------|-------|
+| **Gateway** (`trino-goway`) | `trinoGoway.*` | Trino-protocol reverse proxy + load balancer; serves the web UI, admin API, and metrics | proxy `8080` (client-facing), admin `8090` (UI / API / `/metrics` / `/trino-gateway/livez` / `readyz`) |
+| **routing-service** | `routingService.*` | gRPC routing engine that the gateway consults to pick a backend cluster | gRPC `9001` (data-plane), metrics `9091`, admin gRPC `9092` (kill-switch) |
+
+```
+                 clients
+                    │  :8080 (proxy Service, LB/ClusterIP)
+                    ▼
+            ┌───────────────┐   routing.external.grpcAddr
+            │  trino-goway  │ ─────────────► ┌──────────────────┐
+            │   (gateway)   │   :9001 gRPC   │ routing-service  │
+            └───────┬───────┘ ◄───────────── └──────────────────┘
+        admin :8090 │ (UI/API/metrics/probes)        :9091 metrics
+                    ▼
+              PostgreSQL  (external by default; bundled subchart for dev)
+```
+
+The gateway's `routing.external.grpcAddr` is **auto-wired** to the in-cluster
+routing-service (`<release>-routing-service:9001`) when left unset and
+`routingService.enabled=true`. Set it explicitly to point at an external router.
+
+## Prerequisites
+
+- Kubernetes **{{ template "chart.kubeVersion" . }}** (the routing-service uses
+  the native `grpc:` probe, k8s ≥ 1.24; an exec `grpc_health_probe` fallback is
+  available for older clusters).
+- Helm 3.8+ (or Helm 4).
+- A reachable PostgreSQL for the gateway (or enable the bundled `postgresql`
+  subchart for dev/demo — **not** for production).
+
+## Install
+
+```bash
+# Resolve the optional bundled-Postgres dependency (no-op unless enabled).
+helm dependency build charts/trino-goway
+
+# Dev/demo: bundled Postgres, single replica of each component.
+helm install goway charts/trino-goway \
+  --namespace trino-goway --create-namespace \
+  --set postgresql.enabled=true
+
+# Production: external DB, secrets out of band, scaled + protected.
+helm install goway charts/trino-goway \
+  --namespace trino-goway --create-namespace \
+  --values my-values.yaml
+```
+
+> **Bundled Postgres is dev/demo only.** `postgresql.enabled=true` pulls in the
+> Bitnami `postgresql` subchart, which the chart points at Bitnami's
+> **`bitnamilegacy`** image archive — the frozen community images Bitnami moved
+> off their primary Docker Hub repos in their 2025 image migration (the original
+> `bitnami/postgresql` tags are no longer published). It is fine for a quick
+> local spin-up but is **not** maintained for production. When the gateway's
+> `db.host` is left empty, the chart auto-wires the DSN to the bundled
+> `<release>-postgresql` Service. For anything beyond dev/demo, set
+> `postgresql.enabled=false` (the default) and point `trinoGoway.config.db.*` at
+> a managed/external Postgres.
+
+A minimal production `my-values.yaml`:
+
+```yaml
+global:
+  imageRegistry: ghcr.io/your-org
+
+trinoGoway:
+  replicaCount: 3
+  # BYO Secret holding the DB password, cookie.secret, and any OIDC/LDAP
+  # secrets (keys documented in the secret template). Skips chart-managed Secret.
+  existingSecret: trino-goway-secrets
+  config:
+    db:
+      host: postgres.db.svc
+      port: 5432
+      name: trino_gateway
+      user: gateway
+      sslmode: require
+    auth:
+      type: OIDC
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+
+routingService:
+  replicaCount: 2
+```
+
+## Upgrade
+
+```bash
+helm upgrade goway charts/trino-goway --values my-values.yaml
+```
+
+A `checksum/config` (and `checksum/secret`) pod annotation rolls the
+Deployments automatically when the rendered config or secret changes. The
+chart uses a `RollingUpdate` strategy for both components.
+
+## Values layout (camelCase)
+
+Values are keyed in **camelCase** so templates use clean dot-access
+(`.Values.trinoGoway.config.proxy.port`) with no `index .Values "…"` indirection:
+
+- `global.*` — cross-cutting: `imageRegistry`, `imagePullSecrets`,
+  `commonLabels`, `storageClass`, applied to both components.
+- `trinoGoway.*` — the gateway: scheduling/scaling knobs plus `config.*`, which
+  renders the gateway `config.yaml` (`proxy`, `admin`, `monitor`, `clusterStats`,
+  `backendState`, `db`, `routing`, `auth`, `ui`, `metrics`).
+- `routingService.*` — the routing-service: scheduling/scaling knobs plus
+  `config.*` (`addr`, `metricsAddr`, `adminAddr`, `defaultRoutingGroup`,
+  `sqlParsing`, `tracingEndpoint`, and the `methods:` expr/Starlark rule bodies).
+
+Each component block carries the same scaffolding: `enabled`, `replicaCount`,
+`image.{registry,repository,tag,pullPolicy}`, `resources`, `nodeSelector`,
+`tolerations`, `affinity`, `topologySpreadConstraints`, `podSecurityContext`,
+`securityContext`, `serviceAccount.{create,name,annotations}`, `podAnnotations`,
+`extraEnv`, `autoscaling.*`, and `pdb.*`.
+
+## Database migrations (R3)
+
+The gateway runs `goose.Up` on startup. `goose` does not take a lock, so N
+replicas booting together could otherwise race. The chart resolves this with
+`trinoGoway.migrations.strategy`:
+
+| Strategy | Behavior | Use when |
+|----------|----------|----------|
+| `inline` *(default)* | Each gateway runs migrations on boot; the Go layer wraps them in a PostgreSQL advisory lock (`pg_advisory_lock`) / MySQL `GET_LOCK`, so concurrent replicas serialize and only one applies. | The standard path once the advisory-lock migration is in place. |
+| `hook` | A `pre-install`/`pre-upgrade` Helm Job runs migrations once; the gateway Deployment skips them. | You prefer migrations gated to a single Job (e.g. strict change-control). |
+| `disabled` | No migrations are run by the chart. | Schema is managed entirely out of band. |
+
+## Secrets (R7)
+
+Non-secret config goes to a ConfigMap; the DB password, `cookie.secret`, OIDC
+client secret, and LDAP bind password go to a Secret. Set
+`trinoGoway.existingSecret` to point at a BYO Secret (for External Secrets /
+Vault) and the chart skips creating its own. `cookie.secret` must be **stable
+and shared across all gateway replicas** (it signs the session cookie).
+
+## Production checklist
+
+- [ ] **External database** — `postgresql.enabled=false` (default); point
+      `trinoGoway.config.db.*` at managed Postgres with `sslmode: require`.
+- [ ] **Secrets out of band** — `trinoGoway.existingSecret` from a sealed/Vault
+      source; never commit `cookie.secret` or DB passwords.
+- [ ] **Stable `cookie.secret`** shared across replicas (`openssl rand -hex 32`).
+- [ ] **Migrations** — confirm the advisory-lock path (`strategy=inline`) or use
+      `strategy=hook` (see above) before scaling the gateway past one replica.
+- [ ] **Scale + protect** — `autoscaling.enabled=true` (or `replicaCount>1`),
+      `pdb` enabled, and pod anti-affinity / `topologySpreadConstraints`.
+- [ ] **Probes** — keep the default HTTP probes (gateway) and gRPC probe
+      (routing-service); raise `startupProbe` budget for slow DB connects.
+- [ ] **NetworkPolicy** — `networkPolicy.enabled=true` to restrict traffic to
+      gateway→routing `:9001`, scrape→`:9091`/`:8090`, clients→proxy `:8080`.
+- [ ] **Observability** — `trinoGoway.serviceMonitor.enabled=true` /
+      `routingService.serviceMonitor.enabled=true` with Prometheus Operator, or
+      rely on the pod scrape annotations.
+- [ ] **Resources** — set requests/limits for both components; size the gateway
+      `terminationGracePeriodSeconds` ≥ the proxy drain deadline (30s).
+
+## Versioning
+
+- **`version`** (chart semver) is bumped on every chart change, independently of
+  the application.
+- **`appVersion`** tracks the trino-goway / routing-service application release
+  the chart targets; keep it in sync when bumping the deployed image tags
+  (the image `tag` defaults to `appVersion` when unset).
+
+{{ template "chart.requirementsSection" . }}
+
+{{ template "chart.valuesSection" . }}
+
+{{ template "chart.maintainersSection" . }}
+
+{{ template "chart.sourcesSection" . }}

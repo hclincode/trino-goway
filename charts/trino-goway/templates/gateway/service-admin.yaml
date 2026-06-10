@@ -1,0 +1,27 @@
+{{- if .Values.trinoGoway.enabled }}
+{{- $svc := .Values.trinoGoway.service.admin -}}
+{{- /*
+Internal admin Service: Web UI, admin REST API, /metrics, and the
+livez/readyz probes. ClusterIP only — do NOT expose this to the public internet.
+*/ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "trino-goway.gateway.fullname" . }}-admin
+  labels:
+    {{- include "trino-goway.gateway.labels" . | nindent 4 }}
+    trino-goway.io/endpoint: admin
+  {{- with $svc.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $svc.type }}
+  selector:
+    {{- include "trino-goway.gateway.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: admin
+      port: {{ $svc.port }}
+      targetPort: admin
+      protocol: TCP
+{{- end }}

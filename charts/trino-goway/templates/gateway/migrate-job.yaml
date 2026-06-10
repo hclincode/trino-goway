@@ -1,0 +1,111 @@
+{{- if and .Values.trinoGoway.enabled (eq .Values.trinoGoway.migrations.strategy "hook") }}
+{{- $gw := .Values.trinoGoway -}}
+{{- /*
+migrations.strategy=hook: run schema migrations exactly once, as a
+pre-install/pre-upgrade Helm hook, so the gateway replicas boot with
+db.autoMigrate=false and never race on goose.Up (R3).
+
+CONTRACT WITH go-impl: the Job invokes the gateway binary with `--migrate-only`,
+which must run MigrateUp (under the advisory lock) and exit 0 WITHOUT starting the
+proxy/admin servers — otherwise the Job never completes. db.autoMigrate in the
+mounted config is irrelevant under --migrate-only.
+
+Helm hooks run BEFORE the release's normal resources, so the Deployment's Secret
+does not exist yet at pre-install time. This template therefore ships its own
+hook-scoped config Secret (weight -5) for the Job to mount — unless the operator
+supplies trinoGoway.existingSecret, which already exists out of band.
+*/ -}}
+{{- $useExisting := $gw.existingSecret -}}
+{{- $secretName := $useExisting | default (printf "%s-migrate" (include "trino-goway.gateway.fullname" .)) -}}
+{{- if not $useExisting }}
+{{- $dbPassword := $gw.secrets.dbPassword -}}
+{{- if and (not $dbPassword) .Values.postgresql.enabled -}}
+{{- $dbPassword = .Values.postgresql.auth.password -}}
+{{- end -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  labels:
+    {{- include "trino-goway.gateway.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+type: Opaque
+stringData:
+  config.yaml: |
+{{ include "trino-goway.gateway.configYaml" (dict "ctx" . "withSecrets" true) | indent 4 }}
+{{- with $dbPassword }}
+  db-password: {{ . | quote }}
+{{- end }}
+---
+{{- end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "trino-goway.gateway.fullname" . }}-migrate
+  labels:
+    {{- include "trino-goway.gateway.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ $gw.migrations.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "trino-goway.gateway.selectorLabels" . | nindent 8 }}
+      {{- with $gw.migrations.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      restartPolicy: Never
+      {{- with (include "trino-goway.imagePullSecrets" (dict "global" .Values.global "component" $gw) | trim) }}
+      {{- . | nindent 6 }}
+      {{- end }}
+      serviceAccountName: {{ include "trino-goway.gateway.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml $gw.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "trino-goway.image" (dict "image" $gw.image "global" .Values.global "chart" .Chart) }}
+          imagePullPolicy: {{ $gw.image.pullPolicy }}
+          args:
+            - --config
+            - /etc/trino-goway/config.yaml
+            - --migrate-only
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: db-password
+                  optional: true
+            {{- with $gw.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml ($gw.migrations.resources | default $gw.resources) | nindent 12 }}
+          securityContext:
+            {{- toYaml $gw.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/trino-goway
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ $secretName }}
+            items:
+              - key: config.yaml
+                path: config.yaml
+            defaultMode: 0440
+        - name: tmp
+          emptyDir: {}
+{{- end }}

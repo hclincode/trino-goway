@@ -1,0 +1,44 @@
+suite: OIDC auth
+# OIDC settings render into the gateway config.yaml. Because config.yaml lives in
+# the Secret, the OIDC client secret is inlined there; the ConfigMap audit copy
+# blanks it (clientSecret: "").
+release:
+  name: rel
+  namespace: trino-goway
+templates:
+  - templates/gateway/configmap.yaml
+  - templates/gateway/secret.yaml
+tests:
+  - it: renders OIDC settings into the gateway config (Secret), client secret inlined
+    set:
+      trinoGoway.config.auth.type: OIDC
+      trinoGoway.config.auth.oidc.issuerUrl: "https://idp.example.com"
+      trinoGoway.config.auth.oidc.clientId: "trino-gateway"
+      trinoGoway.config.auth.oidc.jwksUrl: "https://idp.example.com/jwks.json"
+      trinoGoway.secrets.oidcClientSecret: "oidcSECRET"
+    template: templates/gateway/secret.yaml
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "type:\\s*\"?OIDC\"?"
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "issuerUrl:\\s*\"?https://idp.example.com\"?"
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "clientSecret:\\s*\"?oidcSECRET\"?"
+
+  - it: the audit ConfigMap redacts the OIDC client secret
+    set:
+      trinoGoway.config.auth.type: OIDC
+      trinoGoway.config.auth.oidc.clientId: "trino-gateway"
+      trinoGoway.secrets.oidcClientSecret: "oidcSECRET"
+    template: templates/gateway/configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "type:\\s*\"?OIDC\"?"
+      # The secret value must never appear in the non-secret ConfigMap.
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "oidcSECRET"

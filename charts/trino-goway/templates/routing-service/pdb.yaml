@@ -1,0 +1,18 @@
+{{- $rs := .Values.routingService -}}
+{{- if and $rs.enabled $rs.podDisruptionBudget.enabled (or (gt (int $rs.replicaCount) 1) $rs.autoscaling.enabled) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "trino-goway.routingService.fullname" . }}
+  labels:
+    {{- include "trino-goway.routingService.labels" . | nindent 4 }}
+spec:
+  {{- if $rs.podDisruptionBudget.maxUnavailable }}
+  maxUnavailable: {{ $rs.podDisruptionBudget.maxUnavailable }}
+  {{- else }}
+  minAvailable: {{ $rs.podDisruptionBudget.minAvailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "trino-goway.routingService.selectorLabels" . | nindent 6 }}
+{{- end }}

@@ -1,0 +1,61 @@
+suite: migration strategy matrix (R3)
+# inline (default): every replica migrates on boot, db.autoMigrate=true, no Job.
+# hook: a pre-install/pre-upgrade Job runs the gateway with --migrate-only and
+#       the Deployment config sets db.autoMigrate=false.
+# disabled: no Job, db.autoMigrate=false.
+release:
+  name: rel
+  namespace: trino-goway
+templates:
+  - templates/gateway/migrate-job.yaml
+  - templates/gateway/secret.yaml
+tests:
+  - it: inline (default) — no migrate Job, gateway autoMigrate stays on
+    set:
+      trinoGoway.migrations.strategy: inline
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/gateway/migrate-job.yaml
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "autoMigrate:\\s*true"
+        template: templates/gateway/secret.yaml
+
+  - it: hook — renders a pre-install/pre-upgrade Job invoking --migrate-only
+    set:
+      trinoGoway.migrations.strategy: hook
+    template: templates/gateway/migrate-job.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - isKind:
+          of: Job
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --migrate-only
+
+  - it: hook — the Deployment config disables in-pod migrations
+    set:
+      trinoGoway.migrations.strategy: hook
+    template: templates/gateway/secret.yaml
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "autoMigrate:\\s*false"
+
+  - it: disabled — no migrate Job and autoMigrate off
+    set:
+      trinoGoway.migrations.strategy: disabled
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/gateway/migrate-job.yaml
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "autoMigrate:\\s*false"
+        template: templates/gateway/secret.yaml

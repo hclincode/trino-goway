@@ -1,0 +1,32 @@
+{{- if .Values.trinoGoway.enabled }}
+{{- $svc := .Values.trinoGoway.service.proxy -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "trino-goway.gateway.fullname" . }}-proxy
+  labels:
+    {{- include "trino-goway.gateway.labels" . | nindent 4 }}
+  {{- with $svc.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $svc.type }}
+  {{- if and (eq $svc.type "LoadBalancer") $svc.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml $svc.loadBalancerSourceRanges | nindent 4 }}
+  {{- end }}
+  {{- if and (or (eq $svc.type "LoadBalancer") (eq $svc.type "NodePort")) $svc.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ $svc.externalTrafficPolicy }}
+  {{- end }}
+  selector:
+    {{- include "trino-goway.gateway.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: proxy
+      port: {{ $svc.port }}
+      targetPort: proxy
+      protocol: TCP
+      {{- if and (eq $svc.type "NodePort") $svc.nodePort }}
+      nodePort: {{ $svc.nodePort }}
+      {{- end }}
+{{- end }}

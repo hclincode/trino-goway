@@ -1,0 +1,15 @@
+# Patterns to ignore when packaging the chart.
+.DS_Store
+.git/
+.gitignore
+*.tmproj
+*.bak
+*.orig
+*~
+# CI / dev artifacts
+.idea/
+.vscode/
+*.tgz
+# Unit tests are not shipped in the packaged chart.
+tests/
+ci/
