@@ -165,6 +165,12 @@ const (
 type DBConfig struct {
 	Driver string `yaml:"driver"` // "postgres" or "mysql"
 	DSN    string `yaml:"dsn"`
+
+	// AutoMigrate controls whether persistence.Open runs goose migrations on
+	// startup (under an advisory lock). Default true. Set false so an external
+	// migrate job (e.g. a Helm pre-upgrade hook) owns migrations while the
+	// Deployment replicas skip them.
+	AutoMigrate bool `yaml:"autoMigrate"`
 }
 
 // RoutingConfig holds routing configuration.
@@ -314,6 +320,9 @@ func defaultConfig() *Config {
 			Enabled: true,
 			Path:    "/metrics",
 		},
+		DB: DBConfig{
+			AutoMigrate: true,
+		},
 	}
 }
 
@@ -393,6 +402,10 @@ func applyDefaults(cfg *Config) {
 	if cfg.Metrics.Path == "" {
 		cfg.Metrics.Path = "/metrics"
 	}
+	// DB.AutoMigrate defaults to true via defaultConfig(); like Metrics.Enabled
+	// it is only overwritten when the key is explicitly present, so an explicit
+	// "autoMigrate: false" survives while omitting it keeps the migrate-on-start
+	// default.
 }
 
 // Validate checks the configuration for logical errors.

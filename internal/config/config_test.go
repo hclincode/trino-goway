@@ -147,6 +147,23 @@ routing:
 	assert.Equal(t, 300, cfg.Auth.OIDC.JWKSTTLSecs)
 	assert.True(t, cfg.Metrics.Enabled)
 	assert.Equal(t, "/metrics", cfg.Metrics.Path)
+	assert.True(t, cfg.DB.AutoMigrate)
+}
+
+func TestLoad_AutoMigrateDisabled(t *testing.T) {
+	t.Parallel()
+	content := `
+routing:
+  type: EXTERNAL
+db:
+  driver: postgres
+  dsn: "postgres://localhost/trino"
+  autoMigrate: false
+`
+	path := writeTempFile(t, content)
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	assert.False(t, cfg.DB.AutoMigrate)
 }
 
 func TestLoad_MetricsDisabled(t *testing.T) {

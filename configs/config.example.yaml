@@ -125,6 +125,13 @@ db:
   # MySQL   example: "gw:secret@tcp(localhost:3306)/trino_gateway?parseTime=true"
   dsn: "host=localhost port=5432 dbname=trino_gateway user=gw password=secret sslmode=disable"
 
+  # Run embedded goose migrations on startup. Default true. Migrations are
+  # guarded by a database advisory lock, so it is safe for many replicas to boot
+  # with autoMigrate enabled — they serialize and the schema is applied once.
+  # Set false when an external migrate job (e.g. a Helm pre-upgrade hook) owns
+  # migrations and the running replicas should skip them.
+  autoMigrate: true
+
 # ---------------------------------------------------------------------------
 # routing — how inbound requests are assigned to a backend cluster
 # ---------------------------------------------------------------------------

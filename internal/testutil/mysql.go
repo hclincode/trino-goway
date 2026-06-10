@@ -17,6 +17,22 @@ import (
 // Calls t.Cleanup to terminate the container and close the DB.
 func MySQLContainer(t testing.TB) *sqlx.DB {
 	t.Helper()
+	db, _ := mysqlContainer(t, true)
+	return db
+}
+
+// MySQLContainerDSN starts a MySQL testcontainer and returns the DSN string.
+// The container is registered for cleanup via t.Cleanup. Unlike MySQLContainer,
+// no *sqlx.DB is opened — callers that need to hand a DSN to code that opens its
+// own pool (e.g. persistence.Open) avoid an unused connection.
+func MySQLContainerDSN(t testing.TB) string {
+	t.Helper()
+	_, dsn := mysqlContainer(t, false)
+	return dsn
+}
+
+func mysqlContainer(t testing.TB, openDB bool) (*sqlx.DB, string) {
+	t.Helper()
 
 	ctx := context.Background()
 
@@ -55,6 +71,15 @@ func MySQLContainer(t testing.TB) *sqlx.DB {
 	dsn := fmt.Sprintf("testuser:testpass@tcp(%s:%s)/testdb?parseTime=true",
 		host, port.Port())
 
+	if !openDB {
+		t.Cleanup(func() {
+			if err := container.Terminate(context.Background()); err != nil {
+				t.Errorf("testutil: MySQLContainer cleanup: terminate container: %v", err)
+			}
+		})
+		return nil, dsn
+	}
+
 	db, err := sqlx.Open("mysql", dsn)
 	if err != nil {
 		_ = container.Terminate(ctx)
@@ -76,5 +101,5 @@ func MySQLContainer(t testing.TB) *sqlx.DB {
 		}
 	})
 
-	return db
+	return db, dsn
 }
