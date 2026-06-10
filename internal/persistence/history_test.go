@@ -19,13 +19,13 @@ import (
 
 func TestHistoryDAO_Postgres(t *testing.T) {
 	db := testutil.PostgresContainer(t)
-	require.NoError(t, persistence.MigrateUp(db, "postgres"))
+	require.NoError(t, persistence.MigrateUp(context.Background(), db, "postgres"))
 	runHistorySuite(t, db)
 }
 
 func TestHistoryDAO_MySQL(t *testing.T) {
 	db := testutil.MySQLContainer(t)
-	require.NoError(t, persistence.MigrateUp(db, "mysql"))
+	require.NoError(t, persistence.MigrateUp(context.Background(), db, "mysql"))
 	runHistorySuite(t, db)
 }
 

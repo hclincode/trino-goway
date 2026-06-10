@@ -18,13 +18,13 @@ import (
 
 func TestBackendDAO_Postgres(t *testing.T) {
 	db := testutil.PostgresContainer(t)
-	require.NoError(t, persistence.MigrateUp(db, "postgres"))
+	require.NoError(t, persistence.MigrateUp(context.Background(), db, "postgres"))
 	runBackendSuite(t, db)
 }
 
 func TestBackendDAO_MySQL(t *testing.T) {
 	db := testutil.MySQLContainer(t)
-	require.NoError(t, persistence.MigrateUp(db, "mysql"))
+	require.NoError(t, persistence.MigrateUp(context.Background(), db, "mysql"))
 	runBackendSuite(t, db)
 }
 
