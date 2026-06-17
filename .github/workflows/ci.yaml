@@ -7,27 +7,31 @@ name: ci
 # and need Docker; CI compile-checks them (catching API breakage) but defers the
 # heavy live runs to the kind-smoke (helm-chart.yaml) and an optional nightly.
 
+# NOTE: automatic CI is DISABLED for now. The push/pull_request triggers are
+# commented out, so this workflow does NOT run on pushes or PRs — it only runs on
+# demand from the Actions tab (workflow_dispatch). To re-enable automatic runs,
+# uncomment the `push:` and `pull_request:` blocks below.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "**.go"
-      - "go.mod"
-      - "go.sum"
-      - ".golangci.yml"
-      - "migrations/**"
-      - "routing-service/**"
-      - ".github/workflows/ci.yaml"
-  pull_request:
-    paths:
-      - "**.go"
-      - "go.mod"
-      - "go.sum"
-      - ".golangci.yml"
-      - "migrations/**"
-      - "routing-service/**"
-      - ".github/workflows/ci.yaml"
   workflow_dispatch: {}
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "**.go"
+  #     - "go.mod"
+  #     - "go.sum"
+  #     - ".golangci.yml"
+  #     - "migrations/**"
+  #     - "routing-service/**"
+  #     - ".github/workflows/ci.yaml"
+  # pull_request:
+  #   paths:
+  #     - "**.go"
+  #     - "go.mod"
+  #     - "go.sum"
+  #     - ".golangci.yml"
+  #     - "migrations/**"
+  #     - "routing-service/**"
+  #     - ".github/workflows/ci.yaml"
 
 permissions:
   contents: read

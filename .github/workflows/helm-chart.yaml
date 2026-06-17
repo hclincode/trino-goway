@@ -9,17 +9,21 @@ name: helm-chart
 # kind cluster, installs the chart, and checks the gateway /trino-gateway/livez
 # probe and the routing-service gRPC health endpoint.
 
+# NOTE: automatic CI is DISABLED for now. The push/pull_request triggers are
+# commented out, so this workflow does NOT run on pushes or PRs — it only runs on
+# demand from the Actions tab (workflow_dispatch). To re-enable automatic runs,
+# uncomment the `push:` and `pull_request:` blocks below.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "charts/**"
-      - ".github/workflows/helm-chart.yaml"
-  pull_request:
-    paths:
-      - "charts/**"
-      - ".github/workflows/helm-chart.yaml"
   workflow_dispatch: {}
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "charts/**"
+  #     - ".github/workflows/helm-chart.yaml"
+  # pull_request:
+  #   paths:
+  #     - "charts/**"
+  #     - ".github/workflows/helm-chart.yaml"
 
 permissions:
   contents: read
