@@ -1,0 +1,115 @@
+name: ci
+
+# Go CI for the two modules in this repo: the gateway (root module) and the
+# routing-service (separate module under routing-service/). Each job runs the
+# project's established per-task gate: build, vet, golangci-lint, and the
+# race-enabled unit tests. The integration / e2e / diff suites are build-tagged
+# and need Docker; CI compile-checks them (catching API breakage) but defers the
+# heavy live runs to the kind-smoke (helm-chart.yaml) and an optional nightly.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - ".golangci.yml"
+      - "migrations/**"
+      - "routing-service/**"
+      - ".github/workflows/ci.yaml"
+  pull_request:
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - ".golangci.yml"
+      - "migrations/**"
+      - "routing-service/**"
+      - ".github/workflows/ci.yaml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  # golangci-lint major must match the repo's `version: "2"` configs.
+  GOLANGCI_LINT_VERSION: v2.12.2
+
+jobs:
+  gateway:
+    name: gateway module
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # references/* are Java reference submodules not imported by Go code.
+          submodules: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go build
+        run: go build ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (unit, race)
+        run: go test -race ./...
+
+      - name: compile-check tagged suites (integration / e2e / diff)
+        # Type-check the build-tagged test code without running the Docker-backed
+        # suites, so an API change can't silently break them (cf. the HC-9
+        # MigrateUp signature change that broke the integration build).
+        run: |
+          go vet -tags integration ./...
+          go vet -tags e2e ./internal/e2e/...
+          go vet -tags diff ./internal/diffharness/... ./cmd/goway-diff-harness/...
+
+      - name: install golangci-lint
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/${GOLANGCI_LINT_VERSION}/install.sh" \
+            | sudo sh -s -- -b /usr/local/bin "${GOLANGCI_LINT_VERSION}"
+
+      - name: golangci-lint
+        run: golangci-lint run ./...
+
+  routing-service:
+    name: routing-service module
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: routing-service
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: routing-service/go.mod
+          cache: true
+          cache-dependency-path: routing-service/go.sum
+
+      - name: go build
+        run: go build ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (unit, race)
+        run: go test -race ./...
+
+      - name: compile-check integration suite
+        run: go vet -tags integration ./internal/integration/...
+
+      - name: install golangci-lint
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/${GOLANGCI_LINT_VERSION}/install.sh" \
+            | sudo sh -s -- -b /usr/local/bin "${GOLANGCI_LINT_VERSION}"
+
+      - name: golangci-lint
+        run: golangci-lint run ./...
