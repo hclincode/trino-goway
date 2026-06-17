@@ -190,16 +190,26 @@ trinoGoway:
       ssl: false
       xForwardedProtoHeader: false
     db:
-      driver: postgres          # postgres | mysql | "" (no persistence)
+      # postgres | mysql | "" (no persistence). Use `mysql` for MySQL AND for
+      # MariaDB (MariaDB is MySQL wire-compatible) — incl. the optional bundled
+      # `mariadb:` subchart below.
+      driver: postgres
       # autoMigrate is templated from migrations.strategy (do not set here).
-      # DSN assembly (R8): leave dsn empty to build a libpq DSN from the
-      # structured fields below + the password Secret; set dsn to override.
+      # DSN assembly (R8): leave dsn empty to assemble it from the structured
+      # fields below; set dsn to override with a full connection string.
+      #   postgres -> "host=... port=... dbname=... user=... sslmode=..."
+      #               (password injected via PGPASSWORD, never in the DSN)
+      #   mysql    -> "user:password@tcp(host:port)/dbname?parseTime=true"
+      #               (password embedded in the DSN inside the Secret-mounted
+      #                config; blanked in the ConfigMap audit view)
       dsn: ""
       host: ""
+      # Default 5432 (postgres). For the mysql driver use 3306 — when the bundled
+      # mariadb subchart is enabled and this is left at 5432, it is auto-set to 3306.
       port: 5432
       name: trino_gateway
       user: gw
-      sslmode: disable
+      sslmode: disable          # postgres only
     routing:
       defaultGroup: default
       type: EXTERNAL
@@ -416,6 +426,32 @@ postgresql:
   # out-of-box (registry docker.io + the subchart's tag pass through unchanged).
   image:
     repository: bitnamilegacy/postgresql
+  auth:
+    username: gw
+    password: ""
+    database: trino_gateway
+  architecture: standalone
+
+# ===========================================================================
+# mariadb — bundled Bitnami subchart for dev/demo ONLY. Off by default.
+# Mutually exclusive with postgresql (enable at most one). To use it, also set
+# trinoGoway.config.db.driver=mysql (MariaDB is MySQL wire-compatible); the
+# gateway DB host/port auto-derive from this subchart's Service (<release>-mariadb
+# :3306) and the auth.password below flows into the gateway's mysql DSN.
+# Production should use a managed/external database instead.
+# ===========================================================================
+mariadb:
+  enabled: false
+  # Same Bitnami 2025 delisting as postgresql, but worse: the mariadb subchart
+  # defaults to an unpinned `:latest` on the delisted repo. Pin a real, immutable
+  # tag from the bitnamilegacy archive so `--set mariadb.enabled=true` works
+  # out-of-box and is reproducible. The archive froze before the chart's appVersion
+  # (12.3.2), so we pin MariaDB 11.8 LTS — fine for a dev/demo DB (the gateway only
+  # needs a MySQL-wire-compatible server).
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/mariadb
+    tag: 11.8.3-debian-12-r0
   auth:
     username: gw
     password: ""

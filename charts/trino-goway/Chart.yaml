@@ -30,11 +30,15 @@ maintainers:
   - name: trino-goway maintainers
     url: https://github.com/hclincode/trino-goway
 
-# Optional bundled Postgres for dev/demo only (R8). Disabled by default; the
-# production path is an external database. `helm dependency build` resolves it
-# when postgresql.enabled=true.
+# Optional bundled databases for dev/demo only (R8). Both disabled by default
+# (enable at most one); the production path is an external database.
+# `helm dependency build` resolves whichever is enabled.
 dependencies:
   - name: postgresql
     version: ">=16.0.0 <17.0.0"
     repository: https://charts.bitnami.com/bitnami
     condition: postgresql.enabled
+  - name: mariadb
+    version: ">=26.0.0 <27.0.0"
+    repository: https://charts.bitnami.com/bitnami
+    condition: mariadb.enabled

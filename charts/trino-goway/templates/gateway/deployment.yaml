@@ -78,12 +78,15 @@ spec:
               containerPort: {{ $gw.config.admin.port }}
               protocol: TCP
           env:
+            {{- if eq $gw.config.db.driver "postgres" }}
+            {{- /* lib/pq reads PGPASSWORD; the mysql driver embeds the password in the DSN instead. */}}
             - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ include "trino-goway.gateway.secretName" . }}
                   key: db-password
                   optional: true
+            {{- end }}
             {{- with $gw.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

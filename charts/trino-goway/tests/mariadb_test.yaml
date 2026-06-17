@@ -1,0 +1,101 @@
+suite: MySQL/MariaDB driver + bundled mariadb (dev/demo) + DSN assembly
+# For db.driver=mysql (MySQL and MariaDB) the Go driver reads the password ONLY
+# from the DSN (no PGPASSWORD), so the chart embeds it in the DSN — but only in
+# the Secret-mounted config; the ConfigMap audit view blanks it. When the bundled
+# mariadb subchart is enabled the host/port derive from its Service.
+release:
+  name: rel
+  namespace: trino-goway
+tests:
+  - it: assembles a go-sql-driver DSN with the password in the Secret config
+    set:
+      trinoGoway.config.db.driver: mysql
+      trinoGoway.config.db.host: ext.mysql
+      trinoGoway.config.db.port: 3306
+      trinoGoway.config.db.user: gateway
+      trinoGoway.config.db.name: trino_gateway
+      trinoGoway.secrets.dbPassword: s3cret
+    template: templates/gateway/secret.yaml
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'dsn: "gateway:s3cret@tcp\(ext\.mysql:3306\)/trino_gateway\?parseTime=true"'
+
+  - it: blanks the mysql password in the ConfigMap audit view (no leak)
+    set:
+      trinoGoway.config.db.driver: mysql
+      trinoGoway.config.db.host: ext.mysql
+      trinoGoway.config.db.user: gateway
+      trinoGoway.secrets.dbPassword: s3cret
+    template: templates/gateway/configmap.yaml
+    asserts:
+      # The audit ConfigMap renders the password-less form.
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'dsn: "gateway:@tcp\(ext\.mysql'
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "s3cret"
+
+  - it: derives host (and port 3306) from the bundled mariadb Service
+    # Regression guard: bundled host == Bitnami Service name <release>-mariadb,
+    # and the leftover postgres default port (5432) is auto-corrected to 3306.
+    set:
+      mariadb.enabled: true
+      trinoGoway.config.db.driver: mysql
+      mariadb.auth.password: bundlepw
+      trinoGoway.config.db.host: ""
+    template: templates/gateway/secret.yaml
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'dsn: "gw:bundlepw@tcp\(rel-mariadb:3306\)/trino_gateway\?parseTime=true"'
+      - notMatchRegex:
+          path: stringData["config.yaml"]
+          pattern: "tcp\\(rel-trino-goway-mariadb"
+
+  - it: honors mariadb.fullnameOverride for the bundled DB host
+    set:
+      mariadb.enabled: true
+      mariadb.fullnameOverride: mymaria
+      trinoGoway.config.db.driver: mysql
+      trinoGoway.config.db.host: ""
+    template: templates/gateway/secret.yaml
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "tcp\\(mymaria:3306\\)"
+
+  - it: an explicit dsn overrides structured mysql assembly
+    set:
+      trinoGoway.config.db.driver: mysql
+      trinoGoway.config.db.dsn: "user:pw@tcp(custom:3307)/x?parseTime=true"
+    template: templates/gateway/secret.yaml
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "tcp\\(custom:3307\\)"
+
+  - it: does not inject PGPASSWORD for the mysql driver (password is in the DSN)
+    set:
+      trinoGoway.config.db.driver: mysql
+      trinoGoway.config.db.host: ext.mysql
+      trinoGoway.secrets.dbPassword: s3cret
+    template: templates/gateway/deployment.yaml
+    asserts:
+      - notMatchRegexRaw:
+          pattern: PGPASSWORD
+
+  - it: bundled MariaDB defaults to a pinned bitnamilegacy archive image (dev/demo)
+    # The mariadb subchart ships an unpinned :latest on the delisted repo; the
+    # chart pins a real bitnamilegacy tag so --set mariadb.enabled=true works.
+    set:
+      mariadb.enabled: true
+      trinoGoway.config.db.driver: mysql
+    template: charts/mariadb/templates/primary/statefulset.yaml
+    asserts:
+      - isKind:
+          of: StatefulSet
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "bitnamilegacy/mariadb:11\\.8\\.3-debian-12-r0"

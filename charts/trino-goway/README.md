@@ -39,8 +39,9 @@ routing-service (`<release>-routing-service:9001`) when left unset and
   the native `grpc:` probe, k8s ≥ 1.24; an exec `grpc_health_probe` fallback is
   available for older clusters).
 - Helm 3.8+ (or Helm 4).
-- A reachable PostgreSQL for the gateway (or enable the bundled `postgresql`
-  subchart for dev/demo — **not** for production).
+- A reachable database for the gateway — **PostgreSQL** (`db.driver: postgres`) or
+  **MySQL/MariaDB** (`db.driver: mysql`) — or enable a bundled `postgresql` /
+  `mariadb` subchart for dev/demo (**not** for production).
 
 ## Install
 
@@ -52,6 +53,11 @@ helm dependency build charts/trino-goway
 helm install goway charts/trino-goway \
   --namespace trino-goway --create-namespace \
   --set postgresql.enabled=true
+
+# Dev/demo with MariaDB instead (MySQL wire-compatible; sets the mysql driver):
+helm install goway charts/trino-goway \
+  --namespace trino-goway --create-namespace \
+  --set mariadb.enabled=true --set trinoGoway.config.db.driver=mysql
 
 # Production: external DB, secrets out of band, scaled + protected.
 helm install goway charts/trino-goway \
@@ -69,6 +75,18 @@ helm install goway charts/trino-goway \
 > `<release>-postgresql` Service. For anything beyond dev/demo, set
 > `postgresql.enabled=false` (the default) and point `trinoGoway.config.db.*` at
 > a managed/external Postgres.
+
+> **MariaDB / MySQL.** Set `trinoGoway.config.db.driver=mysql` to use a MySQL or
+> MariaDB backend (the gateway uses the Go MySQL driver, which MariaDB is
+> wire-compatible with). For an external server set `trinoGoway.config.db.host`
+> and `port: 3306`. For a dev/demo spin-up, `--set mariadb.enabled=true` pulls in
+> the Bitnami `mariadb` subchart (also pinned to the `bitnamilegacy` archive —
+> MariaDB 11.8 LTS — since its default image is an unpinned `:latest` on the
+> delisted repo); the DSN host/port then auto-wire to the bundled
+> `<release>-mariadb:3306` Service. Unlike Postgres (where the password is injected
+> via `PGPASSWORD`), the MySQL driver reads the password only from the DSN, so the
+> chart embeds it in the connection string **inside the mounted Secret** and blanks
+> it in the ConfigMap audit view. Enable at most one bundled database.
 
 A minimal production `my-values.yaml`:
 
@@ -184,6 +202,7 @@ Kubernetes: `>=1.24.0-0`
 
 | Repository | Name | Version |
 |------------|------|---------|
+| https://charts.bitnami.com/bitnami | mariadb | >=26.0.0 <27.0.0 |
 | https://charts.bitnami.com/bitnami | postgresql | >=16.0.0 <17.0.0 |
 
 ## Values
@@ -191,6 +210,14 @@ Kubernetes: `>=1.24.0-0`
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | global | object | `{"commonLabels":{},"imagePullSecrets":[],"imageRegistry":"","storageClass":""}` | ------------------------------------------------------------------------- |
+| mariadb.architecture | string | `"standalone"` |  |
+| mariadb.auth.database | string | `"trino_gateway"` |  |
+| mariadb.auth.password | string | `""` |  |
+| mariadb.auth.username | string | `"gw"` |  |
+| mariadb.enabled | bool | `false` |  |
+| mariadb.image.registry | string | `"docker.io"` |  |
+| mariadb.image.repository | string | `"bitnamilegacy/mariadb"` |  |
+| mariadb.image.tag | string | `"11.8.3-debian-12-r0"` |  |
 | networkPolicy.enabled | bool | `false` |  |
 | networkPolicy.metricsFrom | list | `[]` |  |
 | networkPolicy.proxyFrom | list | `[]` |  |

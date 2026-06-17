@@ -18,10 +18,7 @@ supplies trinoGoway.existingSecret, which already exists out of band.
 {{- $useExisting := $gw.existingSecret -}}
 {{- $secretName := $useExisting | default (printf "%s-migrate" (include "trino-goway.gateway.fullname" .)) -}}
 {{- if not $useExisting }}
-{{- $dbPassword := $gw.secrets.dbPassword -}}
-{{- if and (not $dbPassword) .Values.postgresql.enabled -}}
-{{- $dbPassword = .Values.postgresql.auth.password -}}
-{{- end -}}
+{{- $dbPassword := include "trino-goway.gateway.dbPassword" . -}}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -79,12 +76,14 @@ spec:
             - /etc/trino-goway/config.yaml
             - --migrate-only
           env:
+            {{- if eq $gw.config.db.driver "postgres" }}
             - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ $secretName }}
                   key: db-password
                   optional: true
+            {{- end }}
             {{- with $gw.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

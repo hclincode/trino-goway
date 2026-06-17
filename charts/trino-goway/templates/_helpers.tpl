@@ -176,19 +176,40 @@ podAntiAffinity:
 {{- end }}
 
 {{/*
-Gateway database DSN (R8). Explicit config.db.dsn wins; otherwise a libpq
-connection string is assembled from the structured fields. The password is NOT
-included here — it is injected at runtime via the PGPASSWORD env from the Secret
-and libpq picks it up. (MySQL DSNs must be supplied explicitly via db.dsn.)
+Gateway database DSN (R8). Explicit config.db.dsn always wins. Otherwise the DSN
+is assembled from the structured db fields, per driver:
+  - postgres: a password-less libpq string ("host=... user=..."); the password is
+    injected at runtime via the PGPASSWORD env (lib/pq), so it never appears here.
+  - mysql (also MariaDB, which is MySQL wire-compatible): a go-sql-driver DSN
+    "user:password@tcp(host:port)/db?parseTime=true". That driver reads the
+    password ONLY from the DSN (no PGPASSWORD equivalent), so it is embedded —
+    but ONLY when withSecrets=true (the Secret-mounted config); the ConfigMap
+    audit view renders it blank.
+Bundled-DB host auto-derivation: postgres -> the postgresql subchart Service,
+mysql -> the mariadb subchart Service (with the port defaulted to 3306 when it is
+left at the postgres default). An explicit db.host / db.dsn always wins.
+Arg: dict "ctx" $ "withSecrets" <bool>.
 */}}
 {{- define "trino-goway.gateway.dsn" -}}
-{{- $db := .Values.trinoGoway.config.db -}}
+{{- $ctx := .ctx -}}
+{{- $with := .withSecrets -}}
+{{- $db := $ctx.Values.trinoGoway.config.db -}}
 {{- if $db.dsn -}}
 {{- $db.dsn -}}
+{{- else if eq $db.driver "mysql" -}}
+{{- $host := $db.host -}}
+{{- $port := int $db.port -}}
+{{- if and (not $host) ($ctx.Values.mariadb | default dict).enabled -}}
+{{- $host = include "trino-goway.mariadb.primaryHost" $ctx -}}
+{{- if eq $port 5432 -}}{{- $port = 3306 -}}{{- end -}}
+{{- end -}}
+{{- $pw := "" -}}
+{{- if $with -}}{{- $pw = include "trino-goway.gateway.dbPassword" $ctx -}}{{- end -}}
+{{- printf "%s:%s@tcp(%s:%d)/%s?parseTime=true" $db.user $pw $host $port $db.name -}}
 {{- else -}}
 {{- $host := $db.host -}}
-{{- if and (not $host) .Values.postgresql.enabled -}}
-{{- $host = include "trino-goway.postgresql.primaryHost" . -}}
+{{- if and (not $host) $ctx.Values.postgresql.enabled -}}
+{{- $host = include "trino-goway.postgresql.primaryHost" $ctx -}}
 {{- end -}}
 {{- printf "host=%s port=%d dbname=%s user=%s sslmode=%s" $host (int $db.port) $db.name $db.user $db.sslmode -}}
 {{- end -}}
@@ -226,6 +247,37 @@ postgresql.enabled (an explicit db.host / db.dsn always wins).
 {{- end }}
 
 {{/*
+Hostname of the bundled Bitnami mariadb primary Service, mirroring the subchart's
+common.names.fullname so the auto-derived mysql DSN host resolves: default
+<release>-mariadb, honoring mariadb.fullnameOverride / mariadb.nameOverride, with
+a "-primary" suffix under the replication architecture. Only used when
+trinoGoway.config.db.host is unset, db.driver=mysql, and mariadb.enabled (an
+explicit db.host / db.dsn always wins).
+*/}}
+{{- define "trino-goway.mariadb.fullname" -}}
+{{- $m := .Values.mariadb | default dict -}}
+{{- if $m.fullnameOverride -}}
+{{- $m.fullnameOverride | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- $name := default "mariadb" $m.nameOverride -}}
+{{- if contains $name .Release.Name -}}
+{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+{{- define "trino-goway.mariadb.primaryHost" -}}
+{{- $m := .Values.mariadb | default dict -}}
+{{- $fullname := include "trino-goway.mariadb.fullname" . -}}
+{{- if eq ($m.architecture | default "standalone") "replication" -}}
+{{- printf "%s-primary" $fullname | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- $fullname -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Whether the gateway should run migrations on boot (db.autoMigrate), derived from
 migrations.strategy: inline=true, hook/disabled=false.
 */}}
@@ -240,6 +292,23 @@ false
 {{/* Name of the gateway Secret (created or BYO existingSecret). */}}
 {{- define "trino-goway.gateway.secretName" -}}
 {{- default (printf "%s-secret" (include "trino-goway.gateway.fullname" .)) .Values.trinoGoway.existingSecret -}}
+{{- end }}
+
+{{/*
+Resolved DB password: explicit trinoGoway.secrets.dbPassword wins; otherwise it
+falls back to the bundled subchart's auth password (postgresql or mariadb,
+whichever is enabled). Empty string when none is set. Consumed by the gateway
+Secret / migrate-job (the db-password key + PGPASSWORD for postgres) and by the
+mysql DSN builder (where the password is embedded in the DSN).
+*/}}
+{{- define "trino-goway.gateway.dbPassword" -}}
+{{- $pw := .Values.trinoGoway.secrets.dbPassword -}}
+{{- if and (not $pw) .Values.postgresql.enabled -}}
+{{- $pw = .Values.postgresql.auth.password -}}
+{{- else if and (not $pw) (.Values.mariadb | default dict).enabled -}}
+{{- $pw = .Values.mariadb.auth.password -}}
+{{- end -}}
+{{- $pw -}}
 {{- end }}
 
 {{/*
@@ -298,7 +367,7 @@ backendState:
   xForwardedProtoHeader: {{ $c.backendState.xForwardedProtoHeader }}
 db:
   driver: {{ $c.db.driver | quote }}
-  dsn: {{ include "trino-goway.gateway.dsn" $ctx | quote }}
+  dsn: {{ include "trino-goway.gateway.dsn" (dict "ctx" $ctx "withSecrets" $with) | quote }}
   autoMigrate: {{ include "trino-goway.gateway.autoMigrate" $ctx }}
 routing:
   defaultGroup: {{ $c.routing.defaultGroup | quote }}
