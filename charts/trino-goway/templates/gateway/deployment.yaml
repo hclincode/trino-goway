@@ -84,7 +84,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ include "trino-goway.gateway.secretName" . }}
-                  key: db-password
+                  key: {{ include "trino-goway.gateway.dbPasswordKey" . }}
                   optional: true
             {{- end }}
             {{- with $gw.extraEnv }}

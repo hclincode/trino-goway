@@ -34,7 +34,7 @@ stringData:
   config.yaml: |
 {{ include "trino-goway.gateway.configYaml" (dict "ctx" . "withSecrets" true) | indent 4 }}
 {{- with $dbPassword }}
-  db-password: {{ . | quote }}
+  {{ include "trino-goway.gateway.dbPasswordKey" $ }}: {{ . | quote }}
 {{- end }}
 ---
 {{- end }}
@@ -81,7 +81,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ $secretName }}
-                  key: db-password
+                  key: {{ include "trino-goway.gateway.dbPasswordKey" . }}
                   optional: true
             {{- end }}
             {{- with $gw.extraEnv }}

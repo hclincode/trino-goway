@@ -261,10 +261,18 @@ trinoGoway:
 
   # ----- Secrets (R7) -----
   # Provide values here to have the chart create a Secret, OR set existingSecret
-  # to the name of a pre-existing Secret (BYO; external-secrets/Vault) whose keys
-  # match: db-password, cookie-secret, oidc-client-secret, ldap-bind-password,
-  # backend-state-password.
+  # to the name of a pre-existing Secret (BYO; external-secrets/Vault). The BYO
+  # Secret must hold the mounted `config.yaml`, and — for the postgres driver — the
+  # DB password under the key named by secretKeys.dbPassword (default db-password).
   existingSecret: ""
+  # Secret key names for DB-credential fields. Override secretKeys.dbPassword to
+  # match a pre-existing/shared Secret whose password key differs from the chart
+  # default — e.g. a Bitnami subchart Secret (`password`/`postgres-password`/
+  # `mariadb-password`) or an external-secrets/Vault sync. Used both for the key
+  # the chart-managed Secret writes and the secretKeyRef the gateway/migrate-job
+  # read (PGPASSWORD, postgres driver).
+  secretKeys:
+    dbPassword: db-password
   secrets:
     dbPassword: ""
     cookieSecret: ""            # REQUIRED; generate: openssl rand -hex 32

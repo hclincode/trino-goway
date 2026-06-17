@@ -173,6 +173,26 @@ client secret, and LDAP bind password go to a Secret. Set
 Vault) and the chart skips creating its own. `cookie.secret` must be **stable
 and shared across all gateway replicas** (it signs the session cookie).
 
+### Configurable DB-password key
+
+The discrete DB-password key (consumed via `PGPASSWORD` for the postgres driver)
+defaults to `db-password`, but is configurable via **`trinoGoway.secretKeys.dbPassword`**
+— set it both for the key the chart-managed Secret writes and the `secretKeyRef`
+the gateway / migrate-job read. This lets a BYO `existingSecret` expose the
+password under its own key name without renaming. For example, to reuse the
+Secret a Bitnami subchart (or an external-secrets sync) already created:
+
+```yaml
+trinoGoway:
+  existingSecret: my-db-secret      # BYO Secret (must also carry config.yaml)
+  secretKeys:
+    dbPassword: postgres-password   # the key name inside my-db-secret
+```
+
+(For the `mysql`/MariaDB driver the password is embedded in the DSN inside the
+mounted config Secret rather than read by key, so this setting applies to the
+postgres `PGPASSWORD` path.)
+
 ## Production checklist
 
 - [ ] **External database** — `postgresql.enabled=false` (default); point

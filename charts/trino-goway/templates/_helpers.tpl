@@ -295,6 +295,17 @@ false
 {{- end }}
 
 {{/*
+Key name for the discrete DB password within the gateway Secret. Configurable via
+trinoGoway.secretKeys.dbPassword so a BYO existingSecret (external-secrets/Vault,
+or a Bitnami subchart Secret) can expose the password under its own key. Default
+"db-password". Used for both the chart-managed Secret's key and the PGPASSWORD
+secretKeyRef (postgres driver).
+*/}}
+{{- define "trino-goway.gateway.dbPasswordKey" -}}
+{{- (.Values.trinoGoway.secretKeys | default dict).dbPassword | default "db-password" -}}
+{{- end }}
+
+{{/*
 Resolved DB password: explicit trinoGoway.secrets.dbPassword wins; otherwise it
 falls back to the bundled subchart's auth password (postgresql or mariadb,
 whichever is enabled). Empty string when none is set. Consumed by the gateway
