@@ -32,13 +32,15 @@ maintainers:
 
 # Optional bundled databases for dev/demo only (R8). Both disabled by default
 # (enable at most one); the production path is an external database.
-# `helm dependency build` resolves whichever is enabled.
+# Pulled from Bitnami's OCI registry so `helm dependency build` resolves them
+# with no `helm repo add` (the classic https://charts.bitnami.com/bitnami index
+# requires a repo definition and is deprecated post-2025).
 dependencies:
   - name: postgresql
     version: ">=16.0.0 <17.0.0"
-    repository: https://charts.bitnami.com/bitnami
+    repository: oci://registry-1.docker.io/bitnamicharts
     condition: postgresql.enabled
   - name: mariadb
     version: ">=26.0.0 <27.0.0"
-    repository: https://charts.bitnami.com/bitnami
+    repository: oci://registry-1.docker.io/bitnamicharts
     condition: mariadb.enabled
