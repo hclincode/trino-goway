@@ -36,6 +36,8 @@ go.work.sum
 
 # Local Claude tooling — share .claude/settings.json, keep personal overrides local
 .claude/settings.local.json
+# Per-project channel state (Telegram bot token, pairing/allowlist, inbox) — never commit
+.claude/channels/
 
 # Compiled binaries (built locally). Anchored to repo root with a leading "/"
 # so they do not also ignore same-named directories like cmd/trino-goway or
